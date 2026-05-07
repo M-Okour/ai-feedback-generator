@@ -6,7 +6,7 @@ import zipfile
 
 import streamlit as st
 import pandas as pd
-import fitz  # PyMuPDF
+import fitz
 import pytesseract
 from PIL import Image
 from docx import Document
@@ -105,7 +105,7 @@ def guess_student_name(student_row):
 
 
 # =========================================================
-# File reading helpers
+# File reading
 # =========================================================
 
 def read_docx_as_text(uploaded_file):
@@ -187,18 +187,7 @@ def read_uploaded_file_as_text(uploaded_file):
 # =========================================================
 
 def extract_rubric_sections(rubric_text):
-    """
-    Extracts PC-specific rubric blocks from the uploaded rubric.
-
-    Returns:
-    {
-        "E1:PC1": "...rubric text...",
-        "E1:PC2": "...rubric text...",
-        ...
-    }
-    """
-
-    pc_patterns = {
+    patterns = {
         "E1:PC1": r"(PC\s*1\.1.*?)(?=PC\s*1\.2|PC1\.2|$)",
         "E1:PC2": r"(PC\s*1\.2.*?)(?=PC\s*1\.3|PC1\.3|$)",
         "E1:PC3": r"(PC\s*1\.3.*?)(?=Element\s*2|PC\s*2\.1|PC2\.1|$)",
@@ -208,12 +197,31 @@ def extract_rubric_sections(rubric_text):
 
     sections = {}
 
-    for pc_code, pattern in pc_patterns.items():
+    for pc_code, pattern in patterns.items():
         match = re.search(pattern, rubric_text, flags=re.IGNORECASE | re.DOTALL)
-        if match:
-            sections[pc_code] = match.group(1).strip()
-        else:
-            sections[pc_code] = rubric_text
+        sections[pc_code] = match.group(1).strip() if match else rubric_text
+
+    return sections
+
+
+# =========================================================
+# Answer key extraction
+# =========================================================
+
+def extract_answer_key_sections(answer_key_text):
+    patterns = {
+        "E1:PC1": r"(E\s*1\s*:?\s*PC\s*1.*?)(?=E\s*1\s*:?\s*PC\s*2|$)",
+        "E1:PC2": r"(E\s*1\s*:?\s*PC\s*2.*?)(?=E\s*1\s*:?\s*PC\s*3|$)",
+        "E1:PC3": r"(E\s*1\s*:?\s*PC\s*3.*?)(?=E\s*2\s*:?\s*PC\s*1|$)",
+        "E2:PC1": r"(E\s*2\s*:?\s*PC\s*1.*?)(?=E\s*2\s*:?\s*PC\s*2|$)",
+        "E2:PC2": r"(E\s*2\s*:?\s*PC\s*2.*?)(?=$)",
+    }
+
+    sections = {}
+
+    for pc_code, pattern in patterns.items():
+        match = re.search(pattern, answer_key_text, flags=re.IGNORECASE | re.DOTALL)
+        sections[pc_code] = match.group(1).strip() if match else ""
 
     return sections
 
@@ -240,14 +248,6 @@ def extract_text_from_scanned_pdf(uploaded_pdf):
 
 
 def extract_pc_sections(exam_text):
-    """
-    Detect sections such as:
-    E1:PC1
-    E1 PC1
-    E1: PC1
-    E 1 : PC 1
-    """
-
     pattern = r"(E\s*\d+\s*:?\s*PC\s*\d+)"
     matches = list(re.finditer(pattern, exam_text, flags=re.IGNORECASE))
 
@@ -291,31 +291,42 @@ def safe_json_loads(raw_text):
     return None
 
 
-def grade_pc_with_ai(pc_code, answer_text, pc_rubric_text, max_retries=5):
+def grade_pc_with_ai(
+    pc_code,
+    answer_text,
+    answer_key_text,
+    pc_rubric_text,
+    max_retries=5
+):
     answer_text = answer_text[:4500]
+    answer_key_text = answer_key_text[:4500]
     pc_rubric_text = pc_rubric_text[:4500]
 
     prompt = f"""
 You are an assessor for MCT 122 Analyse Static Loads.
 
-Use ONLY the provided rubric section to assess the student's answer.
+You must assess the student's scanned answer using:
+1. The official answer key to judge technical correctness.
+2. The official rubric section to decide competency level and mark range.
 
 Performance Criterion:
 {pc_code}
 
-Rubric section:
+Official Answer Key:
+{answer_key_text}
+
+Official Rubric Section:
 {pc_rubric_text}
 
-Student OCR answer:
+Student OCR Answer:
 {answer_text}
 
-Task:
-1. Decide which rubric level best matches the student's answer.
-2. Assign a mark within the correct mark range.
-3. Write short formal feedback explaining:
-   - what the student did correctly
-   - where marks were lost
-   - what should be improved
+Assessment task:
+1. Compare the student's answer with the official answer key.
+2. Check method, formula use, calculations, diagrams/FBDs, units, sign conventions, and final answer.
+3. Use the rubric section to decide the level.
+4. Assign a mark within the correct range.
+5. Write short formal feedback for the Assessor Feedback section.
 
 Return ONLY valid JSON:
 {{
@@ -332,11 +343,12 @@ Mark ranges:
 - Competent with Distinction: 85-100
 
 Important rules:
-- Do not give Competent with Distinction unless the answer fully satisfies the distinction rubric.
-- Do not invent missing calculations, diagrams, units, or steps.
-- If OCR is unclear or the answer is missing, assign Not Yet Competent.
+- Do not invent missing calculations, diagrams, values, units, or solution steps.
+- If OCR is unclear or the answer section is missing, assign Not Yet Competent.
+- If the answer key is missing for this PC, rely on the rubric but mention uncertainty indirectly by focusing on visible work.
+- The level must match the mark range.
 - Feedback must be 1 to 2 sentences.
-- Feedback must be suitable for the Assessor Feedback section.
+- Feedback must be specific and suitable for a formal assessment feedback form.
 """
 
     for attempt in range(max_retries):
@@ -451,6 +463,7 @@ def fill_feedback_template(doc, student_name, student_id, pc_marks, feedback_row
 classlist = st.file_uploader("Upload classlist Excel", type=["xlsx"])
 template = st.file_uploader("Upload feedback template DOCX", type=["docx"])
 rubric = st.file_uploader("Upload grading rubric", type=["docx", "pdf", "xlsx", "txt", "csv"])
+answer_key = st.file_uploader("Upload official answer key", type=["docx", "pdf", "xlsx", "txt", "csv"])
 
 pdfs = st.file_uploader(
     "Upload scanned student exam PDFs",
@@ -476,6 +489,10 @@ if st.button("Generate Feedback Files"):
         st.error("Please upload the grading rubric.")
         st.stop()
 
+    if not answer_key:
+        st.error("Please upload the official answer key.")
+        st.stop()
+
     if not pdfs:
         st.error("Please upload scanned student exam PDFs.")
         st.stop()
@@ -486,17 +503,31 @@ if st.button("Generate Feedback Files"):
     st.dataframe(df.head())
 
     rubric_text = read_uploaded_file_as_text(rubric)
+    answer_key_text = read_uploaded_file_as_text(answer_key)
 
     if not rubric_text.strip():
         st.error("The rubric file could not be read.")
         st.stop()
 
+    if not answer_key_text.strip():
+        st.error("The answer key file could not be read.")
+        st.stop()
+
     rubric_sections = extract_rubric_sections(rubric_text)
+    answer_key_sections = extract_answer_key_sections(answer_key_text)
 
     with st.expander("Preview extracted rubric sections"):
         for pc_code, section in rubric_sections.items():
             st.markdown(f"### {pc_code}")
             st.text(section[:1500])
+
+    with st.expander("Preview extracted answer key sections"):
+        for pc_code, section in answer_key_sections.items():
+            st.markdown(f"### {pc_code}")
+            if section:
+                st.text(section[:1500])
+            else:
+                st.warning(f"No answer key section detected for {pc_code}")
 
     zip_buffer = io.BytesIO()
     report_rows = []
@@ -530,10 +561,11 @@ if st.button("Generate Feedback Files"):
             feedback_rows = {}
 
             for exam_pc, template_pc in pc_map.items():
-                answer_text = pc_sections.get(exam_pc, "")
+                student_answer_text = pc_sections.get(exam_pc, "")
                 pc_rubric_text = rubric_sections.get(exam_pc, rubric_text)
+                pc_answer_key_text = answer_key_sections.get(exam_pc, "")
 
-                if not answer_text.strip():
+                if not student_answer_text.strip():
                     result = {
                         "pc": exam_pc,
                         "mark": 0,
@@ -543,7 +575,8 @@ if st.button("Generate Feedback Files"):
                 else:
                     result = grade_pc_with_ai(
                         pc_code=exam_pc,
-                        answer_text=answer_text,
+                        answer_text=student_answer_text,
+                        answer_key_text=pc_answer_key_text,
                         pc_rubric_text=pc_rubric_text
                     )
 
@@ -560,7 +593,9 @@ if st.button("Generate Feedback Files"):
                     "Template PC": template_pc,
                     "Mark": result["mark"],
                     "Level": result["level"],
-                    "Feedback": result["feedback"]
+                    "Feedback": result["feedback"],
+                    "Answer Section Detected": bool(student_answer_text.strip()),
+                    "Answer Key Section Detected": bool(pc_answer_key_text.strip())
                 })
 
             template.seek(0)
