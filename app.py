@@ -1,6 +1,7 @@
 import io
 import re
 import json
+import time
 import zipfile
 
 import streamlit as st
@@ -10,34 +11,42 @@ import pytesseract
 from PIL import Image
 from docx import Document
 from openai import OpenAI
+from openai import RateLimitError, APIError, APITimeoutError
 
 
-# -----------------------------
+# =========================================================
 # Streamlit setup
-# -----------------------------
+# =========================================================
 
 st.set_page_config(page_title="AI Student Exam Feedback Generator", layout="wide")
 st.title("AI Student Exam Feedback Generator")
 
 
-# -----------------------------
+# =========================================================
 # OpenAI client
-# -----------------------------
+# =========================================================
 
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 
-# -----------------------------
-# Helper functions
-# -----------------------------
+# =========================================================
+# PC mapping
+# =========================================================
+
+pc_map = {
+    "E1:PC1": "PC1.1",
+    "E1:PC2": "PC1.2",
+    "E1:PC3": "PC1.3",
+    "E2:PC1": "PC2.1",
+    "E2:PC2": "PC2.2",
+}
+
+
+# =========================================================
+# General helpers
+# =========================================================
 
 def normalize_pc_code(text):
-    """
-    Converts variations like:
-    E1 PC1, E1: PC1, E 1 : PC 1
-    into:
-    E1:PC1
-    """
     text = text.upper()
     text = re.sub(r"\s+", "", text)
     match = re.search(r"E(\d+):?PC(\d+)", text)
@@ -59,58 +68,161 @@ def grade_level(mark):
         return "Competent with Distinction"
 
 
+def find_student_by_id(df, student_id):
+    student_id = str(student_id).strip()
+
+    for _, row in df.iterrows():
+        values = [str(v).strip() for v in row.values]
+        if student_id in values:
+            return row
+
+    return None
+
+
+def guess_student_name(student_row):
+    possible_columns = [
+        "Student Name",
+        "Name",
+        "Full Name",
+        "Student",
+        "Learner Name",
+        "Student Full Name"
+    ]
+
+    for col in possible_columns:
+        if col in student_row.index:
+            value = str(student_row[col]).strip()
+            if value and value.lower() != "nan":
+                return value
+
+    for value in student_row.values:
+        value = str(value).strip()
+        if value and value.lower() != "nan" and not value.isdigit():
+            if not value.upper().startswith("H00"):
+                return value
+
+    return "Unknown Student"
+
+
+# =========================================================
+# File reading helpers
+# =========================================================
+
+def read_docx_as_text(uploaded_file):
+    uploaded_file.seek(0)
+    doc = Document(uploaded_file)
+
+    text_parts = []
+
+    for p in doc.paragraphs:
+        if p.text.strip():
+            text_parts.append(p.text.strip())
+
+    for table in doc.tables:
+        for row in table.rows:
+            row_text = " | ".join(cell.text.strip() for cell in row.cells)
+            if row_text.strip():
+                text_parts.append(row_text)
+
+    return "\n".join(text_parts)
+
+
+def read_pdf_as_text(uploaded_file):
+    uploaded_file.seek(0)
+    pdf_bytes = uploaded_file.read()
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+    text = ""
+
+    for page in doc:
+        direct_text = page.get_text()
+
+        if direct_text.strip():
+            text += "\n" + direct_text
+        else:
+            pix = page.get_pixmap(dpi=220)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            text += "\n" + pytesseract.image_to_string(img)
+
+    return text
+
+
+def read_excel_as_text(uploaded_file):
+    uploaded_file.seek(0)
+    sheets = pd.read_excel(uploaded_file, sheet_name=None)
+
+    text_parts = []
+
+    for sheet_name, df in sheets.items():
+        text_parts.append(f"\n--- Sheet: {sheet_name} ---")
+        text_parts.append(df.to_string(index=False))
+
+    return "\n".join(text_parts)
+
+
 def read_uploaded_file_as_text(uploaded_file):
-    """
-    Reads uploaded rubric file.
-    Supports txt, csv, xlsx, docx, pdf.
-    """
     if uploaded_file is None:
         return ""
 
     filename = uploaded_file.name.lower()
 
-    if filename.endswith(".txt") or filename.endswith(".csv"):
-        return uploaded_file.read().decode("utf-8", errors="ignore")
-
-    if filename.endswith(".xlsx"):
-        df = pd.read_excel(uploaded_file)
-        return df.to_string(index=False)
-
     if filename.endswith(".docx"):
-        doc = Document(uploaded_file)
-        text = []
-        for p in doc.paragraphs:
-            text.append(p.text)
-
-        for table in doc.tables:
-            for row in table.rows:
-                text.append(" | ".join(cell.text for cell in row.cells))
-
-        return "\n".join(text)
+        return read_docx_as_text(uploaded_file)
 
     if filename.endswith(".pdf"):
-        pdf_bytes = uploaded_file.read()
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-        text = ""
+        return read_pdf_as_text(uploaded_file)
 
-        for page in doc:
-            direct_text = page.get_text()
-            if direct_text.strip():
-                text += "\n" + direct_text
-            else:
-                pix = page.get_pixmap(dpi=220)
-                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                text += "\n" + pytesseract.image_to_string(img)
+    if filename.endswith(".xlsx"):
+        return read_excel_as_text(uploaded_file)
 
-        return text
+    if filename.endswith(".txt") or filename.endswith(".csv"):
+        uploaded_file.seek(0)
+        return uploaded_file.read().decode("utf-8", errors="ignore")
 
     return ""
 
 
+# =========================================================
+# Rubric extraction
+# =========================================================
+
+def extract_rubric_sections(rubric_text):
+    """
+    Extracts PC-specific rubric blocks from the uploaded rubric.
+
+    Returns:
+    {
+        "E1:PC1": "...rubric text...",
+        "E1:PC2": "...rubric text...",
+        ...
+    }
+    """
+
+    pc_patterns = {
+        "E1:PC1": r"(PC\s*1\.1.*?)(?=PC\s*1\.2|PC1\.2|$)",
+        "E1:PC2": r"(PC\s*1\.2.*?)(?=PC\s*1\.3|PC1\.3|$)",
+        "E1:PC3": r"(PC\s*1\.3.*?)(?=Element\s*2|PC\s*2\.1|PC2\.1|$)",
+        "E2:PC1": r"(PC\s*2\.1.*?)(?=PC\s*2\.2|PC2\.2|$)",
+        "E2:PC2": r"(PC\s*2\.2.*?)(?=Document\s*Title|$)",
+    }
+
+    sections = {}
+
+    for pc_code, pattern in pc_patterns.items():
+        match = re.search(pattern, rubric_text, flags=re.IGNORECASE | re.DOTALL)
+        if match:
+            sections[pc_code] = match.group(1).strip()
+        else:
+            sections[pc_code] = rubric_text
+
+    return sections
+
+
+# =========================================================
+# OCR scanned student exam
+# =========================================================
+
 def extract_text_from_scanned_pdf(uploaded_pdf):
-    """
-    OCR scanned exam PDF.
-    """
     uploaded_pdf.seek(0)
     pdf_bytes = uploaded_pdf.read()
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -129,8 +241,13 @@ def extract_text_from_scanned_pdf(uploaded_pdf):
 
 def extract_pc_sections(exam_text):
     """
-    Extract answer sections based on E1:PC1, E1:PC2, etc.
+    Detect sections such as:
+    E1:PC1
+    E1 PC1
+    E1: PC1
+    E 1 : PC 1
     """
+
     pattern = r"(E\s*\d+\s*:?\s*PC\s*\d+)"
     matches = list(re.finditer(pattern, exam_text, flags=re.IGNORECASE))
 
@@ -152,130 +269,131 @@ def extract_pc_sections(exam_text):
     return sections
 
 
-def grade_pc_with_ai(pc_code, answer_text, rubric_text):
-    """
-    Uses AI to grade one PC answer.
-    """
-    prompt = f"""
-You are an assessor for MCT 122 Analyse Static Loads.
+# =========================================================
+# AI grading
+# =========================================================
 
-Grade the student's answer for the following performance criterion.
-
-Performance Criterion:
-{pc_code}
-
-Rubric:
-{rubric_text}
-
-Student OCR answer:
-{answer_text}
-
-Return ONLY valid JSON in this exact format:
-{{
-  "pc": "{pc_code}",
-  "mark": 0,
-  "level": "Not Yet Competent",
-  "feedback": "Short formal feedback explaining where marks were lost."
-}}
-
-Rules:
-- mark must be an integer from 0 to 100.
-- level must match the mark:
-  0-59 = Not Yet Competent
-  60-69 = Competent
-  70-84 = Competent with Merit
-  85-100 = Competent with Distinction
-- feedback must be 1 to 2 sentences.
-- feedback must be specific to the student's answer.
-- Do not invent work that is not visible in the OCR text.
-"""
-
-    response = client.responses.create(
-        model="gpt-4.1-mini",
-        input=prompt
-    )
-
-    raw = response.output_text.strip()
+def safe_json_loads(raw_text):
+    raw_text = raw_text.strip()
 
     try:
-        result = json.loads(raw)
+        return json.loads(raw_text)
     except Exception:
-        result = {
-            "pc": pc_code,
-            "mark": 0,
-            "level": "Not Yet Competent",
-            "feedback": "The answer could not be reliably graded because the AI output was not readable."
-        }
+        pass
 
-    mark = int(result.get("mark", 0))
-    mark = max(0, min(100, mark))
-
-    result["mark"] = mark
-    result["level"] = grade_level(mark)
-
-    return result
-
-
-def find_student_by_id(df, student_id):
-    """
-    Finds a student row by searching all Excel cells for the ID.
-    """
-    student_id = str(student_id).strip()
-
-    for _, row in df.iterrows():
-        values = [str(v).strip() for v in row.values]
-        if student_id in values:
-            return row
+    match = re.search(r"\{.*\}", raw_text, flags=re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except Exception:
+            pass
 
     return None
 
 
-def guess_student_name(student_row):
-    """
-    Tries to identify student name column automatically.
-    """
-    possible_columns = [
-        "Student Name",
-        "Name",
-        "Full Name",
-        "Student",
-        "Learner Name"
-    ]
+def grade_pc_with_ai(pc_code, answer_text, pc_rubric_text, max_retries=5):
+    answer_text = answer_text[:4500]
+    pc_rubric_text = pc_rubric_text[:4500]
 
-    for col in possible_columns:
-        if col in student_row.index:
-            return str(student_row[col])
+    prompt = f"""
+You are an assessor for MCT 122 Analyse Static Loads.
 
-    # fallback: return first non-empty text cell
-    for value in student_row.values:
-        if isinstance(value, str) and not value.strip().isdigit():
-            return value.strip()
+Use ONLY the provided rubric section to assess the student's answer.
 
-    return "Unknown Student"
+Performance Criterion:
+{pc_code}
+
+Rubric section:
+{pc_rubric_text}
+
+Student OCR answer:
+{answer_text}
+
+Task:
+1. Decide which rubric level best matches the student's answer.
+2. Assign a mark within the correct mark range.
+3. Write short formal feedback explaining:
+   - what the student did correctly
+   - where marks were lost
+   - what should be improved
+
+Return ONLY valid JSON:
+{{
+  "pc": "{pc_code}",
+  "mark": 0,
+  "level": "Not Yet Competent",
+  "feedback": "..."
+}}
+
+Mark ranges:
+- Not Yet Competent: 0-59
+- Competent: 60-69
+- Competent with Merit: 70-84
+- Competent with Distinction: 85-100
+
+Important rules:
+- Do not give Competent with Distinction unless the answer fully satisfies the distinction rubric.
+- Do not invent missing calculations, diagrams, units, or steps.
+- If OCR is unclear or the answer is missing, assign Not Yet Competent.
+- Feedback must be 1 to 2 sentences.
+- Feedback must be suitable for the Assessor Feedback section.
+"""
+
+    for attempt in range(max_retries):
+        try:
+            response = client.responses.create(
+                model="gpt-4.1-mini",
+                input=prompt,
+                max_output_tokens=300
+            )
+
+            raw = response.output_text.strip()
+            result = safe_json_loads(raw)
+
+            if result is None:
+                raise ValueError("AI response was not valid JSON.")
+
+            mark = int(result.get("mark", 0))
+            mark = max(0, min(100, mark))
+
+            result["pc"] = pc_code
+            result["mark"] = mark
+            result["level"] = grade_level(mark)
+
+            time.sleep(2)
+            return result
+
+        except RateLimitError:
+            wait_time = 10 * (attempt + 1)
+            st.warning(f"Rate limit reached for {pc_code}. Retrying in {wait_time} seconds...")
+            time.sleep(wait_time)
+
+        except (APIError, APITimeoutError):
+            wait_time = 5 * (attempt + 1)
+            st.warning(f"Temporary API issue for {pc_code}. Retrying in {wait_time} seconds...")
+            time.sleep(wait_time)
+
+        except Exception:
+            return {
+                "pc": pc_code,
+                "mark": 0,
+                "level": "Not Yet Competent",
+                "feedback": "The answer could not be reliably graded because the extracted response or OCR text was unclear."
+            }
+
+    return {
+        "pc": pc_code,
+        "mark": 0,
+        "level": "Not Yet Competent",
+        "feedback": "The answer could not be graded because the API rate limit was reached after several retries."
+    }
 
 
-def clear_cell(cell):
-    cell.text = ""
-
+# =========================================================
+# DOCX filling
+# =========================================================
 
 def fill_feedback_template(doc, student_name, student_id, pc_marks, feedback_rows):
-    """
-    Fills the Word feedback template.
-
-    pc_marks:
-    {
-        "E1:PC1": 60,
-        "E1:PC2": 65,
-        ...
-    }
-
-    feedback_rows:
-    {
-        "PC1.1": ("Competent", "Feedback text"),
-        ...
-    }
-    """
-
     for table in doc.tables:
         for row in table.rows:
             cells = row.cells
@@ -291,7 +409,7 @@ def fill_feedback_template(doc, student_name, student_id, pc_marks, feedback_row
                 if text == "ID No." and i + 1 < len(cells):
                     cells[i + 1].text = student_id
 
-            # Fill PC marks in Assessment Results table
+            # Fill PC marks
             for pc_code, mark in pc_marks.items():
                 if pc_code in row_text:
                     for cell in cells:
@@ -326,13 +444,14 @@ def fill_feedback_template(doc, student_name, student_id, pc_marks, feedback_row
     return doc
 
 
-# -----------------------------
-# Upload section
-# -----------------------------
+# =========================================================
+# Upload interface
+# =========================================================
 
 classlist = st.file_uploader("Upload classlist Excel", type=["xlsx"])
 template = st.file_uploader("Upload feedback template DOCX", type=["docx"])
-rubric = st.file_uploader("Upload rubric / feedback bank", type=["xlsx", "docx", "pdf", "txt", "csv"])
+rubric = st.file_uploader("Upload grading rubric", type=["docx", "pdf", "xlsx", "txt", "csv"])
+
 pdfs = st.file_uploader(
     "Upload scanned student exam PDFs",
     type=["pdf"],
@@ -340,22 +459,9 @@ pdfs = st.file_uploader(
 )
 
 
-# -----------------------------
-# PC mapping
-# -----------------------------
-
-pc_map = {
-    "E1:PC1": "PC1.1",
-    "E1:PC2": "PC1.2",
-    "E1:PC3": "PC1.3",
-    "E2:PC1": "PC2.1",
-    "E2:PC2": "PC2.2",
-}
-
-
-# -----------------------------
-# Main process
-# -----------------------------
+# =========================================================
+# Main processing
+# =========================================================
 
 if st.button("Generate Feedback Files"):
     if not classlist:
@@ -367,7 +473,7 @@ if st.button("Generate Feedback Files"):
         st.stop()
 
     if not rubric:
-        st.error("Please upload the rubric / feedback bank.")
+        st.error("Please upload the grading rubric.")
         st.stop()
 
     if not pdfs:
@@ -384,6 +490,13 @@ if st.button("Generate Feedback Files"):
     if not rubric_text.strip():
         st.error("The rubric file could not be read.")
         st.stop()
+
+    rubric_sections = extract_rubric_sections(rubric_text)
+
+    with st.expander("Preview extracted rubric sections"):
+        for pc_code, section in rubric_sections.items():
+            st.markdown(f"### {pc_code}")
+            st.text(section[:1500])
 
     zip_buffer = io.BytesIO()
     report_rows = []
@@ -407,11 +520,18 @@ if st.button("Generate Feedback Files"):
             exam_text = extract_text_from_scanned_pdf(pdf)
             pc_sections = extract_pc_sections(exam_text)
 
+            with st.expander(f"OCR and detected PC sections for {student_id}"):
+                st.markdown("### Detected PC sections")
+                st.write(list(pc_sections.keys()))
+                st.markdown("### OCR preview")
+                st.text(exam_text[:3000])
+
             pc_marks = {}
             feedback_rows = {}
 
             for exam_pc, template_pc in pc_map.items():
                 answer_text = pc_sections.get(exam_pc, "")
+                pc_rubric_text = rubric_sections.get(exam_pc, rubric_text)
 
                 if not answer_text.strip():
                     result = {
@@ -424,7 +544,7 @@ if st.button("Generate Feedback Files"):
                     result = grade_pc_with_ai(
                         pc_code=exam_pc,
                         answer_text=answer_text,
-                        rubric_text=rubric_text
+                        pc_rubric_text=pc_rubric_text
                     )
 
                 pc_marks[exam_pc] = result["mark"]
@@ -436,7 +556,7 @@ if st.button("Generate Feedback Files"):
                 report_rows.append({
                     "Student ID": student_id,
                     "Student Name": student_name,
-                    "PC": exam_pc,
+                    "Exam PC": exam_pc,
                     "Template PC": template_pc,
                     "Mark": result["mark"],
                     "Level": result["level"],
@@ -458,8 +578,7 @@ if st.button("Generate Feedback Files"):
             doc.save(doc_buffer)
             doc_buffer.seek(0)
 
-            output_name = f"{student_id}.docx"
-            zip_file.writestr(output_name, doc_buffer.getvalue())
+            zip_file.writestr(f"{student_id}.docx", doc_buffer.getvalue())
 
             progress.progress((index + 1) / len(pdfs))
 
@@ -476,6 +595,7 @@ if st.button("Generate Feedback Files"):
 
     if report_rows:
         st.subheader("Generated Marks and Feedback Summary")
+
         report_df = pd.DataFrame(report_rows)
         st.dataframe(report_df)
 
