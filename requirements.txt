@@ -1,1 +1,8 @@
-
+streamlit
+pandas
+openpyxl
+python-docx
+pymupdf
+pytesseract
+pillow
+openai
