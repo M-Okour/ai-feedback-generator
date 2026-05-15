@@ -28,15 +28,23 @@ feedback_mode = st.radio(
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 def fill_assessor_name_in_table(table, assessor_name):
+    """
+    Replaces:
+    Assessor Name:
+
+    with:
+    Assessor Name: John Smith
+    """
+
     if not assessor_name:
         return
 
     for row in table.rows:
-        fill_adjacent_or_empty(
-            row=row,
-            label_keywords=["Assessor Name"],
-            value=assessor_name
-        )
+        for cell in row.cells:
+            text = cell.text.strip()
+
+            if "Assessor Name:" in text or "Assessor Name" in text:
+                cell.text = f"Assessor Name: {assessor_name}"
         
 def get_level(mark):
     mark = float(mark)
