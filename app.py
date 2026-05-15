@@ -41,7 +41,6 @@ def get_grade_column_index(mark):
     4 = Competent with Merit
     5 = Competent with Distinction
     """
-
     mark = float(mark)
 
     if mark < 60:
@@ -68,31 +67,35 @@ def get_first_name(full_name):
 
 def normalize_pc_for_matching(text):
     """
-    Converts PC formats into standard PCx.y format.
-
-    Examples:
-    E1:PC1  -> PC1.1
-    E1:PC2  -> PC1.2
-    E2:PC1  -> PC2.1
-    PC1.1   -> PC1.1
-    PC3.2   -> PC3.2
+    Converts:
+    E1:PC1   -> PC1.1
+    E1:PC2   -> PC1.2
+    E2:PC1   -> PC2.1
+    E3:PC3.1 -> PC3.1
+    PC1.1    -> PC1.1
+    PC3.1    -> PC3.1
+    3.1      -> PC3.1
     """
-
     text = str(text).upper().replace(" ", "")
 
-    # Match Ex:PCy format
+    # Ex:PCy -> PCx.y
     match = re.search(r"E(\d+):?PC(\d+)$", text)
     if match:
         element = match.group(1)
         pc = match.group(2)
         return f"PC{element}.{pc}"
 
-    # Match already-normal PCx.y format
+    # E3:PC3.1 -> PC3.1
+    match = re.search(r"E\d+:?PC(\d+\.\d+)", text)
+    if match:
+        return f"PC{match.group(1)}"
+
+    # PC3.1 -> PC3.1
     match = re.search(r"PC(\d+\.\d+)", text)
     if match:
         return f"PC{match.group(1)}"
 
-    # Match raw x.y format
+    # 3.1 -> PC3.1
     match = re.fullmatch(r"(\d+\.\d+)", text)
     if match:
         return f"PC{match.group(1)}"
@@ -101,7 +104,7 @@ def normalize_pc_for_matching(text):
 
 
 # =========================================================
-# Read rubric
+# Read rubric DOCX
 # =========================================================
 
 def read_docx_text(file):
@@ -126,11 +129,10 @@ def extract_pc_list_from_rubric(rubric_text):
     """
     Detects PCs dynamically from rubric.
     Supports:
+    E1:PC1
+    E3:PC3.1
     PC3.1
     3.1 Determine...
-    E3:PC3.1
-    PC1
-    E1:PC1
     """
 
     pcs = []
@@ -144,11 +146,22 @@ def extract_pc_list_from_rubric(rubric_text):
     for pattern in patterns:
         for match in re.finditer(pattern, rubric_text, flags=re.IGNORECASE):
             if len(match.groups()) == 2:
+                element = match.group(1)
                 pc_number = match.group(2)
+
+                if "." in pc_number:
+                    pc_code = f"PC{pc_number}"
+                else:
+                    pc_code = f"PC{element}.{pc_number}"
             else:
                 pc_number = match.group(1)
 
-            pc_code = f"PC{pc_number}"
+                if "." in pc_number:
+                    pc_code = f"PC{pc_number}"
+                else:
+                    pc_code = f"PC{pc_number}"
+
+            pc_code = normalize_pc_for_matching(pc_code)
 
             if pc_code not in pcs:
                 pcs.append(pc_code)
@@ -163,6 +176,7 @@ def extract_rubric_sections(rubric_text, pc_list):
     for pc in pc_list:
         pc_num = pc.replace("PC", "")
 
+        # PC3.1 can appear as PC3.1 or 3.1
         patterns = [
             rf"\bPC\s*{re.escape(pc_num)}\b",
             rf"\b{re.escape(pc_num)}\b",
@@ -225,11 +239,11 @@ def get_pc_columns(df):
     """
     Finds PC mark columns dynamically.
     Accepts:
+    E1:PC1
+    E3:PC3.1
+    PC1.1
     PC3.1
     3.1
-    E3:PC3.1
-    PC1
-    E1:PC1
     """
 
     pc_cols = {}
@@ -237,14 +251,10 @@ def get_pc_columns(df):
     for col in df.columns:
         col_text = str(col).upper().replace(" ", "")
 
-        match = re.search(r"PC(\d+(?:\.\d+)?)", col_text)
-        if match:
-            pc_cols[f"PC{match.group(1)}"] = col
-            continue
+        normalized = normalize_pc_for_matching(col_text)
 
-        match = re.fullmatch(r"\d+(?:\.\d+)?", col_text)
-        if match:
-            pc_cols[f"PC{match.group(0)}"] = col
+        if re.fullmatch(r"PC\d+\.\d+", normalized):
+            pc_cols[normalized] = col
 
     return pc_cols
 
@@ -253,7 +263,7 @@ def get_pc_columns(df):
 # AI feedback
 # =========================================================
 
-def generate_ai_feedback(first_name, pc, mark, level, rubric_section, max_retries=4):
+def generate_ai_feedback(first_name, pc, level, rubric_section, max_retries=4):
     prompt = f"""
 You are writing formal assessment feedback for a diploma student.
 
@@ -317,17 +327,76 @@ Rules:
 
 
 # =========================================================
-# Word template filling
+# Template filling helpers
 # =========================================================
+
+def fill_name_and_id_in_table(table, student_name, student_id):
+    for row in table.rows:
+        cells = row.cells
+
+        for i, cell in enumerate(cells):
+            text = cell.text.strip()
+
+            if text in ["Student Name", "Student Name:"]:
+                if i + 1 < len(cells):
+                    cells[i + 1].text = str(student_name)
+
+            if text in ["ID No.", "ID No", "Student ID", "Student ID:"]:
+                if i + 1 < len(cells):
+                    cells[i + 1].text = str(student_id)
+
+
+def fill_marks_in_assessment_table(table, pc_marks):
+    for row in table.rows:
+        cells = row.cells
+
+        for cell in cells:
+            cell_pc = normalize_pc_for_matching(cell.text)
+
+            if cell_pc in pc_marks:
+                mark = pc_marks[cell_pc]
+                target_col = get_grade_column_index(mark)
+
+                if target_col < len(cells):
+                    cells[target_col].text = str(int(mark))
+
+
+def fill_summative_grade_in_table(table, pc_marks):
+    marks = [float(m) for m in pc_marks.values()]
+
+    if not marks:
+        return
+
+    if any(m < 60 for m in marks):
+        summative = min(marks)
+    else:
+        summative = round(sum(marks) / len(marks))
+
+    for row in table.rows:
+        cells = row.cells
+
+        for i, cell in enumerate(cells):
+            if "Summative Assessment Grade" in cell.text:
+                if i + 1 < len(cells):
+                    cells[i + 1].text = str(int(summative))
+                return
+
 
 def fill_template(doc, student_name, student_id, feedback_rows):
     """
-    Fills:
-    - Student Name
-    - ID No.
-    - PC marks in the correct grade-band column
-    - Summative Assessment Grade in the adjacent cell
-    - Assessor Feedback table without mark column
+    Template has two major sections:
+
+    1. Student Acknowledgment
+       - fill Student Name
+       - fill ID No.
+       - do not fill marks
+
+    2. Assessment Results and Feedback
+       - fill Student Name
+       - fill ID No.
+       - fill PC marks in grade-band columns
+       - fill Summative Assessment Grade
+       - add feedback table
     """
 
     pc_marks = {
@@ -336,46 +405,33 @@ def fill_template(doc, student_name, student_id, feedback_rows):
     }
 
     for table in doc.tables:
-        for row in table.rows:
-            cells = row.cells
-            row_text = [cell.text.strip() for cell in cells]
+        table_text = "\n".join(
+            cell.text.strip()
+            for row in table.rows
+            for cell in row.cells
+        )
 
-            # Fill Student Name and ID
-            for i, cell in enumerate(cells):
-                text = cell.text.strip()
+        is_ack_table = (
+            "Portfolio Evidence Requirements" in table_text
+            or "Student Acknowledgment" in table_text
+            or "Unit Title/s" in table_text
+        )
 
-                if text in ["Student Name", "Student Name:"] and i + 1 < len(cells):
-                    cells[i + 1].text = str(student_name)
+        is_assessment_table = (
+            "Assessment Results" in table_text
+            or "PC Grade" in table_text
+            or "Summative Assessment Grade" in table_text
+            or "Grade Classification" in table_text
+        )
 
-                if text in ["ID No.", "ID No", "Student ID", "Student ID:"] and i + 1 < len(cells):
-                    cells[i + 1].text = str(student_id)
+        if is_ack_table:
+            fill_name_and_id_in_table(table, student_name, student_id)
+            continue
 
-            # Fill PC marks in correct grade-band column
-            for i, cell in enumerate(cells):
-                cell_pc = normalize_pc_for_matching(cell.text)
-
-                if cell_pc in pc_marks:
-                    mark = pc_marks[cell_pc]
-                    target_col = get_grade_column_index(mark)
-
-                    if target_col < len(cells):
-                        cells[target_col].text = str(int(mark))
-
-            # Fill Summative Assessment Grade beside label
-            if any("Summative Assessment Grade" in txt for txt in row_text):
-                marks = [float(m) for m in pc_marks.values()]
-
-                if marks:
-                    if any(m < 60 for m in marks):
-                        summative = min(marks)
-                    else:
-                        summative = round(sum(marks) / len(marks))
-
-                    for i, cell in enumerate(cells):
-                        if "Summative Assessment Grade" in cell.text:
-                            if i + 1 < len(cells):
-                                cells[i + 1].text = str(int(summative))
-                            break
+        if is_assessment_table:
+            fill_name_and_id_in_table(table, student_name, student_id)
+            fill_marks_in_assessment_table(table, pc_marks)
+            fill_summative_grade_in_table(table, pc_marks)
 
     # Add Assessor Feedback table WITHOUT marks
     doc.add_paragraph("")
@@ -436,7 +492,7 @@ if st.button("Generate AI Feedback Files"):
         st.stop()
 
     if not pc_cols:
-        st.error("Could not detect PC mark columns. Use headers like PC3.1, 3.1, or E3:PC3.1.")
+        st.error("Could not detect PC mark columns. Use headers like E1:PC1, PC1.1, PC3.1, or 3.1.")
         st.stop()
 
     zip_buffer = io.BytesIO()
@@ -452,10 +508,12 @@ if st.button("Generate AI Feedback Files"):
             feedback_rows = []
 
             for pc in pc_list:
-                if pc not in pc_cols:
+                normalized_pc = normalize_pc_for_matching(pc)
+
+                if normalized_pc not in pc_cols:
                     continue
 
-                mark = student[pc_cols[pc]]
+                mark = student[pc_cols[normalized_pc]]
 
                 if pd.isna(mark):
                     continue
@@ -467,7 +525,6 @@ if st.button("Generate AI Feedback Files"):
                 feedback = generate_ai_feedback(
                     first_name=first_name,
                     pc=pc,
-                    mark=mark,
                     level=level,
                     rubric_section=rubric_section
                 )
