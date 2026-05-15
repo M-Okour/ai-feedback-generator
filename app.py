@@ -10,6 +10,7 @@ from openai import OpenAI, RateLimitError, APIError, APITimeoutError
 
 st.set_page_config(page_title="AI Feedback Generator", layout="wide")
 st.title("AI Student Feedback Generator from Marks and Rubric")
+
 feedback_mode = st.radio(
     "Feedback generation mode",
     options=[
@@ -18,101 +19,68 @@ feedback_mode = st.radio(
     ],
     index=0
 )
+
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 
-# =========================================================
-# Basic helpers
-# =========================================================
-
 def get_level(mark):
     mark = float(mark)
-
     if mark < 60:
         return "Not Yet Competent"
     elif mark < 70:
         return "Competent"
     elif mark < 85:
         return "Competent with Merit"
-    else:
-        return "Competent with Distinction"
+    return "Competent with Distinction"
 
 
 def get_grade_column_index(mark):
-    """
-    Template table columns:
-    0 = LO & PC
-    1 = Grade Classification
-    2 = Not Yet Competent
-    3 = Competent
-    4 = Competent with Merit
-    5 = Competent with Distinction
-    """
     mark = float(mark)
-
     if mark < 60:
         return 2
     elif mark < 70:
         return 3
     elif mark < 85:
         return 4
-    else:
-        return 5
+    return 5
 
 
 def get_first_name(full_name):
     if pd.isna(full_name):
         return "Student"
-
     full_name = str(full_name).strip()
-
-    if not full_name:
-        return "Student"
-
-    return full_name.split()[0]
+    return full_name.split()[0] if full_name else "Student"
 
 
 def normalize_pc_for_matching(text):
     """
-    Converts:
-    E1:PC1   -> PC1.1
-    E1:PC2   -> PC1.2
-    E2:PC1   -> PC2.1
+    Ex:PCy -> PCx.y
+    E1:PC1 -> PC1.1
+    E1:PC2 -> PC1.2
+    E2:PC1 -> PC2.1
     E3:PC3.1 -> PC3.1
-    PC1.1    -> PC1.1
-    PC3.1    -> PC3.1
-    3.1      -> PC3.1
+    PC3.1 -> PC3.1
     """
     text = str(text).upper().replace(" ", "")
 
-    # Ex:PCy -> PCx.y
     match = re.search(r"E(\d+):?PC(\d+)$", text)
     if match:
-        element = match.group(1)
-        pc = match.group(2)
-        return f"PC{element}.{pc}"
+        return f"PC{match.group(1)}.{match.group(2)}"
 
-    # E3:PC3.1 -> PC3.1
     match = re.search(r"E\d+:?PC(\d+\.\d+)", text)
     if match:
         return f"PC{match.group(1)}"
 
-    # PC3.1 -> PC3.1
     match = re.search(r"PC(\d+\.\d+)", text)
     if match:
         return f"PC{match.group(1)}"
 
-    # 3.1 -> PC3.1
     match = re.fullmatch(r"(\d+\.\d+)", text)
     if match:
         return f"PC{match.group(1)}"
 
     return text
 
-
-# =========================================================
-# Read rubric DOCX
-# =========================================================
 
 def read_docx_text(file):
     file.seek(0)
@@ -133,15 +101,6 @@ def read_docx_text(file):
 
 
 def extract_pc_list_from_rubric(rubric_text):
-    """
-    Detects PCs dynamically from rubric.
-    Supports:
-    E1:PC1
-    E3:PC3.1
-    PC3.1
-    3.1 Determine...
-    """
-
     pcs = []
 
     patterns = [
@@ -162,11 +121,7 @@ def extract_pc_list_from_rubric(rubric_text):
                     pc_code = f"PC{element}.{pc_number}"
             else:
                 pc_number = match.group(1)
-
-                if "." in pc_number:
-                    pc_code = f"PC{pc_number}"
-                else:
-                    pc_code = f"PC{pc_number}"
+                pc_code = f"PC{pc_number}"
 
             pc_code = normalize_pc_for_matching(pc_code)
 
@@ -182,8 +137,6 @@ def extract_rubric_sections(rubric_text, pc_list):
 
     for pc in pc_list:
         pc_num = pc.replace("PC", "")
-
-        # PC3.1 can appear as PC3.1 or 3.1
         patterns = [
             rf"\bPC\s*{re.escape(pc_num)}\b",
             rf"\b{re.escape(pc_num)}\b",
@@ -191,24 +144,18 @@ def extract_rubric_sections(rubric_text, pc_list):
 
         for pattern in patterns:
             for match in re.finditer(pattern, rubric_text, flags=re.IGNORECASE):
-                headings.append({
-                    "pc": pc,
-                    "start": match.start()
-                })
+                headings.append({"pc": pc, "start": match.start()})
 
     headings = sorted(headings, key=lambda x: x["start"])
 
     clean = []
-
     for h in headings:
         if not clean:
             clean.append(h)
         else:
             last = clean[-1]
-
             if h["pc"] == last["pc"] and abs(h["start"] - last["start"]) < 50:
                 continue
-
             clean.append(h)
 
     for i, h in enumerate(clean):
@@ -221,10 +168,6 @@ def extract_rubric_sections(rubric_text, pc_list):
 
     return sections
 
-
-# =========================================================
-# Excel helpers
-# =========================================================
 
 def find_student_columns(df):
     name_col = None
@@ -243,21 +186,10 @@ def find_student_columns(df):
 
 
 def get_pc_columns(df):
-    """
-    Finds PC mark columns dynamically.
-    Accepts:
-    E1:PC1
-    E3:PC3.1
-    PC1.1
-    PC3.1
-    3.1
-    """
-
     pc_cols = {}
 
     for col in df.columns:
         col_text = str(col).upper().replace(" ", "")
-
         normalized = normalize_pc_for_matching(col_text)
 
         if re.fullmatch(r"PC\d+\.\d+", normalized):
@@ -265,10 +197,6 @@ def get_pc_columns(df):
 
     return pc_cols
 
-
-# =========================================================
-# AI feedback
-# =========================================================
 
 def generate_ai_feedback(first_name, pc, level, rubric_section, max_retries=4):
     prompt = f"""
@@ -309,23 +237,16 @@ Style requirements:
                 input=prompt,
                 max_output_tokens=140
             )
-
             return response.output_text.strip()
 
         except RateLimitError:
             wait_time = 8 * (attempt + 1)
-            st.warning(
-                f"Rate limit reached while generating feedback for {pc}. "
-                f"Retrying in {wait_time} seconds..."
-            )
+            st.warning(f"Rate limit reached while generating feedback for {pc}. Retrying in {wait_time} seconds...")
             time.sleep(wait_time)
 
         except (APIError, APITimeoutError):
             wait_time = 5 * (attempt + 1)
-            st.warning(
-                f"Temporary API issue for {pc}. "
-                f"Retrying in {wait_time} seconds..."
-            )
+            st.warning(f"Temporary API issue for {pc}. Retrying in {wait_time} seconds...")
             time.sleep(wait_time)
 
         except Exception:
@@ -337,10 +258,6 @@ Style requirements:
     )
 
 
-# =========================================================
-# Template filling helpers
-# =========================================================
-
 def fill_name_and_id_in_table(table, student_name, student_id):
     for row in table.rows:
         cells = row.cells
@@ -350,26 +267,33 @@ def fill_name_and_id_in_table(table, student_name, student_id):
 
             if text in ["Student Name", "Student Name:"]:
                 if i + 1 < len(cells):
-                    cells[i + 2].text = str(student_name)
+                    cells[i + 1].text = str(student_name)
 
             if text in ["ID No.", "ID No", "Student ID", "Student ID:"]:
                 if i + 1 < len(cells):
-                    cells[i + 2].text = str(student_id)
+                    cells[i + 1].text = str(student_id)
 
 
 def fill_marks_in_assessment_table(table, pc_marks):
     for row in table.rows:
         cells = row.cells
+        row_pc = None
 
         for cell in cells:
-            cell_pc = normalize_pc_for_matching(cell.text)
+            normalized = normalize_pc_for_matching(cell.text)
 
-            if cell_pc in pc_marks:
-                mark = pc_marks[cell_pc]
-                target_col = get_grade_column_index(mark)
+            if normalized in pc_marks:
+                row_pc = normalized
+                break
 
-                if target_col < len(cells):
-                    cells[target_col+1].text = str(int(mark))
+        if row_pc is None:
+            continue
+
+        mark = pc_marks[row_pc]
+        target_col = get_grade_column_index(mark)
+
+        if target_col < len(cells):
+            cells[target_col].text = str(int(mark))
 
 
 def fill_summative_grade_in_table(table, pc_marks):
@@ -387,29 +311,13 @@ def fill_summative_grade_in_table(table, pc_marks):
         cells = row.cells
 
         for i, cell in enumerate(cells):
-            if "Summative Assessment Grade %:" in cell.text:
+            if "Summative Assessment Grade" in cell.text:
                 if i + 1 < len(cells):
                     cells[i + 1].text = str(int(summative))
                 return
 
 
 def fill_template(doc, student_name, student_id, feedback_rows):
-    """
-    Template has two major sections:
-
-    1. Student Acknowledgment
-       - fill Student Name
-       - fill ID No.
-       - do not fill marks
-
-    2. Assessment Results and Feedback
-       - fill Student Name
-       - fill ID No.
-       - fill PC marks in grade-band columns
-       - fill Summative Assessment Grade
-       - add feedback table
-    """
-
     pc_marks = {
         normalize_pc_for_matching(row["PC"]): row["Mark"]
         for row in feedback_rows
@@ -444,7 +352,6 @@ def fill_template(doc, student_name, student_id, feedback_rows):
             fill_marks_in_assessment_table(table, pc_marks)
             fill_summative_grade_in_table(table, pc_marks)
 
-    # Add Assessor Feedback table WITHOUT marks
     doc.add_paragraph("")
     doc.add_paragraph("Assessor Feedback:")
 
@@ -457,9 +364,9 @@ def fill_template(doc, student_name, student_id, feedback_rows):
     header[2].text = "Feedback"
 
     for row_data in feedback_rows:
-        if not row_data["Feedback"].strip():
+        if not str(row_data["Feedback"]).strip():
             continue
-            
+
         row = feedback_table.add_row().cells
         row[0].text = row_data["PC"]
         row[1].text = row_data["Level"]
@@ -468,18 +375,10 @@ def fill_template(doc, student_name, student_id, feedback_rows):
     return doc
 
 
-# =========================================================
-# Streamlit upload interface
-# =========================================================
-
 rubric_file = st.file_uploader("Upload rubric.docx", type=["docx"])
 classlist_file = st.file_uploader("Upload classlist.xlsx", type=["xlsx"])
 template_file = st.file_uploader("Upload Template_Feedback.docx", type=["docx"])
 
-
-# =========================================================
-# Main process
-# =========================================================
 
 if st.button("Generate AI Feedback Files"):
     if not rubric_file or not classlist_file or not template_file:
@@ -538,27 +437,26 @@ if st.button("Generate AI Feedback Files"):
 
                 should_generate_feedback = (
                     feedback_mode == "Generate feedback for all PCs"
-                    or level == "Not Yet Competent")
-                
+                    or level == "Not Yet Competent"
+                )
+
                 if should_generate_feedback:
-                
                     feedback = generate_ai_feedback(
                         first_name=first_name,
                         pc=pc,
                         level=level,
                         rubric_section=rubric_section
                     )
-                
                 else:
                     feedback = ""
-                
+
                 feedback_rows.append({
                     "PC": pc,
                     "Mark": mark,
                     "Level": level,
                     "Feedback": feedback
                 })
-                
+
                 summary_rows.append({
                     "Student Name": student_name,
                     "Student ID": student_id,
