@@ -14,6 +14,10 @@ st.title("AI Student Feedback Generator from Marks and Rubric")
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 
+# =========================================================
+# Basic helpers
+# =========================================================
+
 def get_level(mark):
     mark = float(mark)
 
@@ -27,6 +31,29 @@ def get_level(mark):
         return "Competent with Distinction"
 
 
+def get_grade_column_index(mark):
+    """
+    Template table columns:
+    0 = LO & PC
+    1 = Grade Classification
+    2 = Not Yet Competent
+    3 = Competent
+    4 = Competent with Merit
+    5 = Competent with Distinction
+    """
+
+    mark = float(mark)
+
+    if mark < 60:
+        return 2
+    elif mark < 70:
+        return 3
+    elif mark < 85:
+        return 4
+    else:
+        return 5
+
+
 def get_first_name(full_name):
     if pd.isna(full_name):
         return "Student"
@@ -38,6 +65,36 @@ def get_first_name(full_name):
 
     return full_name.split()[0]
 
+
+def normalize_pc_for_matching(text):
+    """
+    Converts:
+    E1:PC1      -> PC1
+    E3:PC3.1    -> PC3.1
+    PC3.1       -> PC3.1
+    3.1         -> PC3.1
+    """
+
+    text = str(text).upper().replace(" ", "")
+
+    match = re.search(r"E\d+:?(PC\d+(?:\.\d+)?)", text)
+    if match:
+        return match.group(1)
+
+    match = re.search(r"(PC\d+(?:\.\d+)?)", text)
+    if match:
+        return match.group(1)
+
+    match = re.fullmatch(r"\d+(?:\.\d+)?", text)
+    if match:
+        return f"PC{text}"
+
+    return text
+
+
+# =========================================================
+# Read rubric
+# =========================================================
 
 def read_docx_text(file):
     file.seek(0)
@@ -58,11 +115,19 @@ def read_docx_text(file):
 
 
 def extract_pc_list_from_rubric(rubric_text):
+    """
+    Detects PCs dynamically from rubric.
+    Supports:
+    PC3.1
+    3.1 Determine...
+    E3:PC3.1
+    """
+
     pcs = []
 
     patterns = [
-        r"\bE\s*(\d+)\s*:?\s*PC\s*(\d+\.\d+)\b",
-        r"\bPC\s*(\d+\.\d+)\b",
+        r"\bE\s*(\d+)\s*:?\s*PC\s*(\d+\.\d+|\d+)\b",
+        r"\bPC\s*(\d+\.\d+|\d+)\b",
         r"\b(\d+\.\d+)\s+(?:Determine|Analyse|Analyze|Calculate|Use|Construct|Apply)\b",
     ]
 
@@ -83,7 +148,6 @@ def extract_pc_list_from_rubric(rubric_text):
 
 def extract_rubric_sections(rubric_text, pc_list):
     sections = {}
-
     headings = []
 
     for pc in pc_list:
@@ -124,13 +188,9 @@ def extract_rubric_sections(rubric_text, pc_list):
     return sections
 
 
-def extract_rubric_level_text(rubric_section, level):
-    """
-    Simple fallback: send the whole PC rubric section to AI.
-    This avoids brittle parsing of rubric table columns.
-    """
-    return rubric_section
-
+# =========================================================
+# Excel helpers
+# =========================================================
 
 def find_student_columns(df):
     name_col = None
@@ -155,6 +215,8 @@ def get_pc_columns(df):
     PC3.1
     3.1
     E3:PC3.1
+    PC1
+    E1:PC1
     """
 
     pc_cols = {}
@@ -162,17 +224,21 @@ def get_pc_columns(df):
     for col in df.columns:
         col_text = str(col).upper().replace(" ", "")
 
-        match = re.search(r"PC(\d+\.\d+)", col_text)
+        match = re.search(r"PC(\d+(?:\.\d+)?)", col_text)
         if match:
             pc_cols[f"PC{match.group(1)}"] = col
             continue
 
-        match = re.fullmatch(r"\d+\.\d+", col_text)
+        match = re.fullmatch(r"\d+(?:\.\d+)?", col_text)
         if match:
             pc_cols[f"PC{match.group(0)}"] = col
 
     return pc_cols
 
+
+# =========================================================
+# AI feedback
+# =========================================================
 
 def generate_ai_feedback(first_name, pc, mark, level, rubric_section, max_retries=4):
     prompt = f"""
@@ -201,7 +267,7 @@ Rules:
 - Match the feedback to the mark and competency level.
 - Explain what the student achieved and what should be improved.
 - Use clear academic language.
-- Do not mention AI, rubric file, or automated marking.
+- Do not mention AI, rubric file, automated marking, or the exact numerical mark.
 - Do not include bullet points.
 """
 
@@ -217,12 +283,18 @@ Rules:
 
         except RateLimitError:
             wait_time = 8 * (attempt + 1)
-            st.warning(f"Rate limit reached while generating feedback for {pc}. Retrying in {wait_time} seconds...")
+            st.warning(
+                f"Rate limit reached while generating feedback for {pc}. "
+                f"Retrying in {wait_time} seconds..."
+            )
             time.sleep(wait_time)
 
         except (APIError, APITimeoutError):
             wait_time = 5 * (attempt + 1)
-            st.warning(f"Temporary API issue for {pc}. Retrying in {wait_time} seconds...")
+            st.warning(
+                f"Temporary API issue for {pc}. "
+                f"Retrying in {wait_time} seconds..."
+            )
             time.sleep(wait_time)
 
         except Exception:
@@ -234,15 +306,31 @@ Rules:
     )
 
 
+# =========================================================
+# Word template filling
+# =========================================================
+
 def fill_template(doc, student_name, student_id, feedback_rows):
     """
-    Fills name, ID, and adds feedback table under the template.
+    Fills:
+    - Student Name
+    - ID No.
+    - PC marks in the correct grade-band column
+    - Summative Assessment Grade
+    - Assessor Feedback table without mark column
     """
+
+    pc_marks = {
+        row["PC"]: row["Mark"]
+        for row in feedback_rows
+    }
 
     for table in doc.tables:
         for row in table.rows:
             cells = row.cells
+            row_text = [cell.text.strip() for cell in cells]
 
+            # Fill Student Name and ID
             for i, cell in enumerate(cells):
                 text = cell.text.strip()
 
@@ -252,32 +340,78 @@ def fill_template(doc, student_name, student_id, feedback_rows):
                 if text in ["ID No.", "ID No", "Student ID", "Student ID:"] and i + 1 < len(cells):
                     cells[i + 1].text = str(student_id)
 
+            # Fill PC marks in correct grade-band column
+            for pc, mark in pc_marks.items():
+                normalized_pc = normalize_pc_for_matching(pc)
+
+                row_has_pc = False
+
+                for cell in cells:
+                    cell_pc = normalize_pc_for_matching(cell.text)
+                    if normalized_pc == cell_pc:
+                        row_has_pc = True
+                        break
+
+                if row_has_pc:
+                    target_col = get_grade_column_index(mark)
+
+                    if target_col < len(cells):
+                        cells[target_col].text = str(int(mark))
+
+            # Fill Summative Assessment Grade
+            if any("Summative Assessment Grade" in txt for txt in row_text):
+                marks = list(pc_marks.values())
+
+                if marks:
+                    if any(float(m) < 60 for m in marks):
+                        summative = min(float(m) for m in marks)
+                    else:
+                        summative = round(sum(float(m) for m in marks) / len(marks))
+
+                    placed = False
+
+                    for cell in cells:
+                        if cell.text.strip() == "":
+                            cell.text = str(int(summative))
+                            placed = True
+                            break
+
+                    if not placed:
+                        cells[-1].text = str(int(summative))
+
+    # Add Assessor Feedback table WITHOUT marks
     doc.add_paragraph("")
     doc.add_paragraph("Assessor Feedback:")
 
-    table = doc.add_table(rows=1, cols=4)
-    table.style = "Table Grid"
+    feedback_table = doc.add_table(rows=1, cols=3)
+    feedback_table.style = "Table Grid"
 
-    header = table.rows[0].cells
+    header = feedback_table.rows[0].cells
     header[0].text = "PC"
-    header[1].text = "Mark"
-    header[2].text = "Level"
-    header[3].text = "Feedback"
+    header[1].text = "Level"
+    header[2].text = "Feedback"
 
     for row_data in feedback_rows:
-        row = table.add_row().cells
+        row = feedback_table.add_row().cells
         row[0].text = row_data["PC"]
-        row[1].text = str(row_data["Mark"])
-        row[2].text = row_data["Level"]
-        row[3].text = row_data["Feedback"]
+        row[1].text = row_data["Level"]
+        row[2].text = row_data["Feedback"]
 
     return doc
 
+
+# =========================================================
+# Streamlit upload interface
+# =========================================================
 
 rubric_file = st.file_uploader("Upload rubric.docx", type=["docx"])
 classlist_file = st.file_uploader("Upload classlist.xlsx", type=["xlsx"])
 template_file = st.file_uploader("Upload Template_Feedback.docx", type=["docx"])
 
+
+# =========================================================
+# Main process
+# =========================================================
 
 if st.button("Generate AI Feedback Files"):
     if not rubric_file or not classlist_file or not template_file:
