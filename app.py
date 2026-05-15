@@ -813,7 +813,7 @@ def insert_feedback_table_at_assessor_feedback(
 
             for i, cell in enumerate(cells):
                 if "Assessor Feedback:" in cell.text or "Assessor Feedback" in cell.text:
-                    target_row_index = row._tr.getparent().index(row._tr)
+                    target_row_index = row._tr.getparent().index(row._tr) - 1
 
                     if target_row_index < len(table.rows):
                         next_row = table.rows[target_row_index]
