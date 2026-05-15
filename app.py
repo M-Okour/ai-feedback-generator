@@ -5,6 +5,9 @@ import zipfile
 import pandas as pd
 import streamlit as st
 
+from docx.shared import Pt
+from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
+
 from docx import Document
 from docx.shared import Inches
 from docx.oxml import OxmlElement
@@ -24,9 +27,128 @@ feedback_mode = st.radio(
     ],
     index=0
 )
+sa2_date = st.text_input(
+    "Second Attempt Date",
+    placeholder="Example: 15/06/2026"
+)
 
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
+def extract_lo_sections_from_rubric(rubric_text):
+    """
+    Extracts LO/Element sections from rubric.
+
+    Returns:
+    {
+        "LO1": {
+            "title": "Use vector algebra to solve force and moment problems",
+            "pcs": ["PC1.1", "PC1.2", "PC1.3"]
+        },
+        "LO2": {
+            "title": "Analyse equilibrium problems",
+            "pcs": ["PC2.1", "PC2.2"]
+        }
+    }
+    """
+
+    lo_data = {}
+
+    element_pattern = r"Element\s+(\d+)\s*:\s*(.*?)(?=Element\s+\d+\s*:|$)"
+    element_matches = re.finditer(element_pattern, rubric_text, flags=re.IGNORECASE | re.DOTALL)
+
+    for match in element_matches:
+        element_number = match.group(1)
+        section = match.group(0)
+        title_line = match.group(2).strip().split("\n")[0].strip()
+
+        pcs = []
+
+        for pc_match in re.finditer(r"\bPC\s*(\d+\.\d+)\b", section, flags=re.IGNORECASE):
+            pc = f"PC{pc_match.group(1)}"
+            if pc not in pcs:
+                pcs.append(pc)
+
+        lo_data[f"LO{element_number}"] = {
+            "title": title_line,
+            "pcs": pcs
+        }
+
+    return lo_data
+
+def build_lo_comments(feedback_rows, lo_data):
+    """
+    Builds general LO comments based on PC marks under each Element/LO.
+    """
+
+    pc_lookup = {
+        normalize_pc_for_matching(row["PC"]): row
+        for row in feedback_rows
+    }
+
+    comments = []
+
+    for lo, data in lo_data.items():
+        pcs = data["pcs"]
+        title = data["title"]
+
+        related_rows = [
+            pc_lookup[normalize_pc_for_matching(pc)]
+            for pc in pcs
+            if normalize_pc_for_matching(pc) in pc_lookup
+        ]
+
+        if not related_rows:
+            continue
+
+        failed = [
+            row["PC"]
+            for row in related_rows
+            if row["Level"] == "Not Yet Competent"
+        ]
+
+        levels = [row["Level"] for row in related_rows]
+
+        if failed:
+            comment = (
+                f"{lo}: In {title}, further improvement is required in "
+                f"{', '.join(failed)}. Please review the relevant methods, show clear working steps, "
+                f"and check the final answers carefully."
+            )
+        elif all(level == "Competent with Distinction" for level in levels):
+            comment = (
+                f"{lo}: In {title}, you demonstrated strong achievement across the related performance criteria, "
+                f"with clear methods, accurate solutions, and well-presented work."
+            )
+        elif any(level == "Competent with Merit" for level in levels):
+            comment = (
+                f"{lo}: In {title}, you demonstrated good achievement across the related performance criteria. "
+                f"To improve further, focus on completing all details such as labels, units, and final verification."
+            )
+        else:
+            comment = (
+                f"{lo}: In {title}, you demonstrated a competent level of understanding across the related performance criteria. "
+                f"Further improvement can be made by improving accuracy, presentation, and completeness of solution steps."
+            )
+
+        comments.append(comment)
+
+    return comments
+def format_cell_paragraphs(cell, font_size=9, cell_width=1.0):
+    """
+    Removes spacing before/after paragraphs inside table cells.
+    """
+    set_cell_width(cell, cell_width)
+    for paragraph in cell.paragraphs:
+        paragraph.paragraph_format.space_before = Pt(0)
+        paragraph.paragraph_format.space_after = Pt(0)
+        paragraph.paragraph_format.line_spacing = 1
+
+        if paragraph.runs:
+            for run in paragraph.runs:
+                run.font.size = Pt(font_size)
+
+        paragraph.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
+        
 def fill_assessor_name_in_table(table, assessor_name):
     """
     Replaces:
@@ -253,25 +375,41 @@ def extract_sa_number_from_doc(doc):
 
     return ""
 
-def build_summative_comment(student_name, overall_level, sa_number, feedback_rows):
+def build_summative_comment(student_name, overall_level, sa_number, feedback_rows, sa2_date, lo_data):
     failed_pcs = [
         row["PC"]
         for row in feedback_rows
         if row["Level"] == "Not Yet Competent"
     ]
+
     first_name = get_first_name(student_name)
 
     if failed_pcs:
         failed_text = ", ".join(failed_pcs)
-        return (
-            f"{student_name}, you have achieved an overall {overall_level} grade "
+
+        comment = (
+            f"{first_name}, you have achieved an overall {overall_level} grade "
             f"in SA{sa_number}. Please see the feedback for {failed_text}."
         )
 
-    return (
-        f"{first_name}, you have achieved an overall {overall_level} grade "
-        f"in SA{sa_number}."
+        if sa2_date.strip():
+            comment += f" The second attempt will be conducted on {sa2_date}."
+
+    else:
+        comment = (
+            f"{first_name}, you have achieved an overall {overall_level} grade "
+            f"in SA{sa_number}."
+        )
+
+    lo_comments = build_lo_comments(
+        feedback_rows=feedback_rows,
+        lo_data=lo_data
     )
+
+    if lo_comments:
+        comment += "\n" + "\n".join(lo_comments)
+
+    return comment
 
 def generate_ai_feedback(first_name, pc, level, rubric_section, max_retries=4):
     prompt = f"""
@@ -554,7 +692,9 @@ def build_feedback_table_in_cell(
     feedback_rows,
     student_name,
     overall_level,
-    sa_number
+    sa_number,
+    sa2_date,
+    lo_data
 ):
     cell.text = ""
 
@@ -583,9 +723,11 @@ def build_feedback_table_in_cell(
             else ""
         )
 
-        set_cell_width(row[0], 0.75)
-        set_cell_width(row[1], 1.35)
-        set_cell_width(row[2], 4.4)
+        # format_cell_paragraphs("row number", "font size", "cell width")
+        format_cell_paragraphs(row[0], 9, 0.75)
+        format_cell_paragraphs(row[1], 9, 1.35)
+        format_cell_paragraphs(row[2], 9, 4.40)
+        
 
     # -------------------------------------------------
     # Summative comment BELOW the table
@@ -595,7 +737,9 @@ def build_feedback_table_in_cell(
         student_name=student_name,
         overall_level=overall_level,
         sa_number=sa_number,
-        feedback_rows=feedback_rows
+        feedback_rows=feedback_rows,
+        sa2_date=sa2_date,
+        lo_data=lo_data
     )
 
     cell.add_paragraph("")
@@ -604,7 +748,7 @@ def build_feedback_table_in_cell(
     return table
 
 
-def insert_feedback_table_at_assessor_feedback(doc, feedback_rows, student_name, overall_level, sa_number):
+def insert_feedback_table_at_assessor_feedback(doc, feedback_rows, student_name, overall_level, sa_number, lo_data):
     feedback_inserted = False
 
     for table in doc.tables:
@@ -629,7 +773,8 @@ def insert_feedback_table_at_assessor_feedback(doc, feedback_rows, student_name,
                         feedback_rows,
                         student_name,
                         overall_level,
-                        sa_number
+                        sa_number,
+                        lo_data
                     )
 
                     feedback_inserted = True
@@ -671,7 +816,7 @@ def insert_feedback_table_at_assessor_feedback(doc, feedback_rows, student_name,
     return doc
 
 
-def fill_template(doc, student_name, student_id, assessor_name, feedback_rows):
+def fill_template(doc, student_name, student_id, assessor_name, feedback_rows, lo_data, sa2_date):
     pc_marks = {
         normalize_pc_for_matching(row["PC"]): row["Mark"]
         for row in feedback_rows
@@ -716,7 +861,9 @@ def fill_template(doc, student_name, student_id, assessor_name, feedback_rows):
         feedback_rows=feedback_rows,
         student_name=student_name,
         overall_level=overall_level,
-        sa_number=sa_number
+        sa_number=sa_number,
+        sa2_date=sa2_date,
+        lo_data=lo_data
     )
 
     return doc
@@ -736,11 +883,19 @@ if st.button("Generate AI Feedback Files"):
     pc_list = extract_pc_list_from_rubric(rubric_text)
     rubric_sections = extract_rubric_sections(rubric_text, pc_list)
 
+    rubric_text = read_docx_text(rubric_file)
+    pc_list = extract_pc_list_from_rubric(rubric_text)
+    rubric_sections = extract_rubric_sections(rubric_text, pc_list)
+    
+    lo_data = extract_lo_sections_from_rubric(rubric_text)
+    
+    st.write("LO/Element mapping:", lo_data)
+    
     df = pd.read_excel(classlist_file)
-
+    
     name_col, id_col = find_student_columns(df)
     pc_cols = get_pc_columns(df)
-
+    
     st.subheader("Detected Setup")
     st.write("Name column:", name_col)
     st.write("ID column:", id_col)
@@ -821,7 +976,9 @@ if st.button("Generate AI Feedback Files"):
                 student_name=student_name,
                 student_id=student_id,
                 assessor_name=assessor_name,
-                feedback_rows=feedback_rows
+                feedback_rows=feedback_rows,
+                lo_data=lo_data,
+                sa2_date=sa2_date
             )
 
             doc_buffer = io.BytesIO()
