@@ -673,7 +673,14 @@ def fill_template(doc, student_name, student_id, feedback_rows):
 
     overall_level = get_overall_level_from_marks(pc_marks)
     sa_number = extract_sa_number_from_doc(doc)
-    doc = insert_feedback_table_at_assessor_feedback(doc, feedback_rows)
+    
+    doc = insert_feedback_table_at_assessor_feedback(
+        doc=doc,
+        feedback_rows=feedback_rows,
+        student_name=student_name,
+        overall_level=overall_level,
+        sa_number=sa_number
+    )
 
     return doc
 
