@@ -486,12 +486,9 @@ def build_feedback_table_in_cell(cell, feedback_rows):
 
     set_cell_width(header[0], 0.75)
     set_cell_width(header[1], 1.35)
-    set_cell_width(header[2], 5.4)
+    set_cell_width(header[2], 4.4)
 
     for row_data in feedback_rows:
-        if not str(row_data["Feedback"]).strip():
-            continue
-
         row = table.add_row().cells
         row[0].text = row_data["PC"]
         row[1].text = row_data["Level"]
@@ -499,7 +496,7 @@ def build_feedback_table_in_cell(cell, feedback_rows):
 
         set_cell_width(row[0], 0.75)
         set_cell_width(row[1], 1.35)
-        set_cell_width(row[2], 5.4)
+        set_cell_width(row[2], 4.4)
 
     return table
 
@@ -556,9 +553,6 @@ def insert_feedback_table_at_assessor_feedback(doc, feedback_rows):
         set_cell_width(header[2], 5.4)
 
         for row_data in feedback_rows:
-            if not str(row_data["Feedback"]).strip():
-                continue
-
             row = fallback_table.add_row().cells
             row[0].text = row_data["PC"]
             row[1].text = row_data["Level"]
@@ -566,7 +560,7 @@ def insert_feedback_table_at_assessor_feedback(doc, feedback_rows):
 
             set_cell_width(row[0], 0.75)
             set_cell_width(row[1], 1.35)
-            set_cell_width(row[2], 5.4)
+            set_cell_width(row[2], 4.4)
 
     return doc
 
