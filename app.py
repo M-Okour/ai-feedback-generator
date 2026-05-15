@@ -72,7 +72,6 @@ def normalize_pc_for_matching(text):
     E1:PC1      -> PC1
     E3:PC3.1    -> PC3.1
     PC3.1       -> PC3.1
-    3.1         -> PC3.1
     """
 
     text = str(text).upper().replace(" ", "")
@@ -84,10 +83,6 @@ def normalize_pc_for_matching(text):
     match = re.search(r"(PC\d+(?:\.\d+)?)", text)
     if match:
         return match.group(1)
-
-    match = re.fullmatch(r"\d+(?:\.\d+)?", text)
-    if match:
-        return f"PC{text}"
 
     return text
 
@@ -121,6 +116,8 @@ def extract_pc_list_from_rubric(rubric_text):
     PC3.1
     3.1 Determine...
     E3:PC3.1
+    PC1
+    E1:PC1
     """
 
     pcs = []
@@ -168,13 +165,16 @@ def extract_rubric_sections(rubric_text, pc_list):
     headings = sorted(headings, key=lambda x: x["start"])
 
     clean = []
+
     for h in headings:
         if not clean:
             clean.append(h)
         else:
             last = clean[-1]
+
             if h["pc"] == last["pc"] and abs(h["start"] - last["start"]) < 50:
                 continue
+
             clean.append(h)
 
     for i, h in enumerate(clean):
@@ -250,10 +250,7 @@ Student first name:
 Performance Criterion:
 {pc}
 
-Student mark:
-{mark}
-
-Competency level:
+Student competency level:
 {level}
 
 Relevant rubric criteria:
@@ -264,7 +261,7 @@ Write feedback for the Assessor Feedback section.
 Rules:
 - Use the student's first name once at the beginning.
 - Write 1 to 2 sentences only.
-- Match the feedback to the mark and competency level.
+- Match the feedback to the competency level.
 - Explain what the student achieved and what should be improved.
 - Use clear academic language.
 - Do not mention AI, rubric file, automated marking, or the exact numerical mark.
@@ -316,12 +313,12 @@ def fill_template(doc, student_name, student_id, feedback_rows):
     - Student Name
     - ID No.
     - PC marks in the correct grade-band column
-    - Summative Assessment Grade
+    - Summative Assessment Grade in the adjacent cell
     - Assessor Feedback table without mark column
     """
 
     pc_marks = {
-        row["PC"]: row["Mark"]
+        normalize_pc_for_matching(row["PC"]): row["Mark"]
         for row in feedback_rows
     }
 
@@ -341,43 +338,31 @@ def fill_template(doc, student_name, student_id, feedback_rows):
                     cells[i + 1].text = str(student_id)
 
             # Fill PC marks in correct grade-band column
-            for pc, mark in pc_marks.items():
-                normalized_pc = normalize_pc_for_matching(pc)
+            for i, cell in enumerate(cells):
+                cell_pc = normalize_pc_for_matching(cell.text)
 
-                row_has_pc = False
-
-                for cell in cells:
-                    cell_pc = normalize_pc_for_matching(cell.text)
-                    if normalized_pc == cell_pc:
-                        row_has_pc = True
-                        break
-
-                if row_has_pc:
+                if cell_pc in pc_marks:
+                    mark = pc_marks[cell_pc]
                     target_col = get_grade_column_index(mark)
 
                     if target_col < len(cells):
                         cells[target_col].text = str(int(mark))
 
-            # Fill Summative Assessment Grade
+            # Fill Summative Assessment Grade beside label
             if any("Summative Assessment Grade" in txt for txt in row_text):
-                marks = list(pc_marks.values())
+                marks = [float(m) for m in pc_marks.values()]
 
                 if marks:
-                    if any(float(m) < 60 for m in marks):
-                        summative = min(float(m) for m in marks)
+                    if any(m < 60 for m in marks):
+                        summative = min(marks)
                     else:
-                        summative = round(sum(float(m) for m in marks) / len(marks))
+                        summative = round(sum(marks) / len(marks))
 
-                    placed = False
-
-                    for cell in cells:
-                        if cell.text.strip() == "":
-                            cell.text = str(int(summative))
-                            placed = True
+                    for i, cell in enumerate(cells):
+                        if "Summative Assessment Grade" in cell.text:
+                            if i + 1 < len(cells):
+                                cells[i + 1].text = str(int(summative))
                             break
-
-                    if not placed:
-                        cells[-1].text = str(int(summative))
 
     # Add Assessor Feedback table WITHOUT marks
     doc.add_paragraph("")
