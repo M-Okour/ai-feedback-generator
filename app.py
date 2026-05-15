@@ -251,36 +251,135 @@ Style requirements:
     )
 
 
+# =========================================================
+# Template filling helpers - safer for merged cells
+# =========================================================
+
+def row_texts(row):
+    return [cell.text.strip() for cell in row.cells]
+
+
+def row_full_text(row):
+    return " | ".join(row_texts(row))
+
+
+def is_empty_cell(cell):
+    return cell.text.strip() == ""
+
+
+def fill_first_empty_cell_in_row(row, value, start_index=0):
+    cells = row.cells
+
+    for i in range(start_index, len(cells)):
+        if is_empty_cell(cells[i]):
+            cells[i].text = str(value)
+            return True
+
+    return False
+
+
+def fill_adjacent_or_empty(row, label_keywords, value):
+    """
+    Safer than cells[i+1] for merged-cell templates.
+    It tries:
+    1. cell immediately after the label
+    2. first empty cell after the label
+    3. first empty cell in the row
+    """
+
+    cells = row.cells
+
+    for i, cell in enumerate(cells):
+        text = cell.text.strip()
+
+        if any(keyword.lower() in text.lower() for keyword in label_keywords):
+
+            # Try immediate right cell
+            if i + 1 < len(cells) and is_empty_cell(cells[i + 1]):
+                cells[i + 1].text = str(value)
+                return True
+
+            # Try any empty cell after label
+            if fill_first_empty_cell_in_row(row, value, start_index=i + 1):
+                return True
+
+            # Try any empty cell in row
+            if fill_first_empty_cell_in_row(row, value, start_index=0):
+                return True
+
+    return False
+
+
 def fill_name_and_id_in_table(table, student_name, student_id):
+    """
+    Handles both:
+    Student Name | [empty]
+    ID No.       | [empty]
+
+    Safer for merged tables because it searches empty target cells.
+    """
+
     for row in table.rows:
-        cells = row.cells
+        fill_adjacent_or_empty(
+            row=row,
+            label_keywords=["Student Name"],
+            value=student_name
+        )
 
-        for i, cell in enumerate(cells):
-            text = cell.text.strip()
+        fill_adjacent_or_empty(
+            row=row,
+            label_keywords=["ID No.", "ID No", "Student ID"],
+            value=student_id
+        )
 
-            if text in ["Student Name", "Student Name:"]:
-                if i + 2 < len(cells):
-                    cells[i + 2].text = str(student_name)
 
-            if text in ["ID No.", "ID No", "Student ID", "Student ID:"]:
-                if i + 2 < len(cells):
-                    cells[i + 2].text = str(student_id)
-                else:
-                    if i + 1 < len(cells):
-                        cells[i + 1].text = str(student_id)
+def get_row_pc(row, pc_marks):
+    """
+    Find whether this row belongs to one of the PCs.
+    """
+
+    for cell in row.cells:
+        normalized = normalize_pc_for_matching(cell.text)
+
+        if normalized in pc_marks:
+            return normalized
+
+    return None
+
+
+def clear_possible_grade_cells(row):
+    """
+    Clears likely grade cells in a PC row before filling the correct one.
+    This prevents old placeholder marks from remaining.
+    Assumes columns 2-5 are grade-band columns when available.
+    """
+
+    cells = row.cells
+
+    for idx in [2, 3, 4, 5]:
+        if idx < len(cells):
+            # Do not clear if the cell itself contains a PC code
+            if not normalize_pc_for_matching(cells[idx].text).startswith("PC"):
+                cells[idx].text = ""
 
 
 def fill_marks_in_assessment_table(table, pc_marks):
+    """
+    Fills the mark in the correct grade-band column.
+
+    Expected visual structure:
+    col 0 = LO & PC
+    col 1 = Grade Classification
+    col 2 = Not Yet Competent
+    col 3 = Competent
+    col 4 = Competent with Merit
+    col 5 = Competent with Distinction
+
+    Merged header cells may exist, but PC rows usually still preserve row cells.
+    """
+
     for row in table.rows:
-        cells = row.cells
-        row_pc = None
-
-        for cell in cells:
-            normalized = normalize_pc_for_matching(cell.text)
-
-            if normalized in pc_marks:
-                row_pc = normalized
-                break
+        row_pc = get_row_pc(row, pc_marks)
 
         if row_pc is None:
             continue
@@ -288,8 +387,15 @@ def fill_marks_in_assessment_table(table, pc_marks):
         mark = pc_marks[row_pc]
         target_col = get_grade_column_index(mark)
 
+        clear_possible_grade_cells(row)
+
+        cells = row.cells
+
         if target_col < len(cells):
-            cells[target_col + 1].text = str(int(mark))
+            cells[target_col].text = str(int(mark))
+        else:
+            # fallback: first empty cell after the PC cell
+            fill_first_empty_cell_in_row(row, str(int(mark)), start_index=1)
 
 
 def fill_summative_grade_in_table(table, pc_marks):
@@ -304,13 +410,21 @@ def fill_summative_grade_in_table(table, pc_marks):
         summative = round(sum(marks) / len(marks))
 
     for row in table.rows:
-        cells = row.cells
+        text = row_full_text(row)
 
-        for i, cell in enumerate(cells):
-            if "Summative Assessment Grade %:" in cell.text:
-                if i + 2 < len(cells):
-                    cells[i + 2].text = str(int(summative))
-                return
+        if "Summative Assessment Grade" in text:
+            filled = fill_adjacent_or_empty(
+                row=row,
+                label_keywords=["Summative Assessment Grade"],
+                value=int(summative)
+            )
+
+            if not filled:
+                cells = row.cells
+                if len(cells) > 1:
+                    cells[-1].text = str(int(summative))
+
+            return
 
 
 def set_cell_width(cell, width_inches):
@@ -367,10 +481,19 @@ def insert_feedback_table_at_assessor_feedback(doc, feedback_rows):
 
             for i, cell in enumerate(cells):
                 if "Assessor Feedback:" in cell.text or "Assessor Feedback" in cell.text:
-                    target_index = i + 1 if i + 1 < len(cells) else i
+                    # Prefer an empty cell after the label
+                    target_cell = None
+
+                    for j in range(i + 1, len(cells)):
+                        if is_empty_cell(cells[j]):
+                            target_cell = cells[j]
+                            break
+
+                    if target_cell is None:
+                        target_cell = cells[i]
 
                     build_feedback_table_in_cell(
-                        cells[target_index+1],
+                        target_cell,
                         feedback_rows
                     )
 
