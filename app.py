@@ -375,7 +375,14 @@ def extract_sa_number_from_doc(doc):
 
     return ""
 
-def build_summative_comment(student_name, overall_level, sa_number, feedback_rows, sa2_date, lo_data):
+def build_summative_comment(
+    student_name,
+    overall_level,
+    sa_number,
+    feedback_rows,
+    sa2_date,
+    lo_data
+):
     failed_pcs = [
         row["PC"]
         for row in feedback_rows
@@ -384,32 +391,44 @@ def build_summative_comment(student_name, overall_level, sa_number, feedback_row
 
     first_name = get_first_name(student_name)
 
+    # -------------------------------------------------
+    # Main overall comment
+    # -------------------------------------------------
+
+    if failed_pcs:
+
+        failed_text = ", ".join(failed_pcs)
+
+        comment = (
+            f"{first_name}, you have achieved an overall "
+            f"{overall_level} grade in SA{sa_number}. "
+            f"Please see the feedback for {failed_text}."
+        )
+
+        if sa2_date.strip():
+            comment += (
+                f" The second attempt will be conducted on "
+                f"{sa2_date}."
+            )
+
+    else:
+
+        comment = (
+            f"{first_name}, you have achieved an overall "
+            f"{overall_level} grade in SA{sa_number}."
+        )
+
+    # -------------------------------------------------
+    # LO comments
+    # -------------------------------------------------
+
     lo_comments = build_lo_comments(
         feedback_rows=feedback_rows,
         lo_data=lo_data
     )
 
     if lo_comments:
-        comment += "\n" + "\n".join(lo_comments)
-        
-    if failed_pcs:
-        failed_text = ", ".join(failed_pcs)
-
-        comment = (
-            f"{first_name}, you have achieved an overall {overall_level} grade "
-            f"in SA{sa_number}. Please see the feedback for {failed_text}."
-        )
-
-        if sa2_date.strip():
-            comment += f" The second attempt will be conducted on {sa2_date}."
-
-    else:
-        comment = (
-            f"{first_name}, you have achieved an overall {overall_level} grade "
-            f"in SA{sa_number}."
-        )
-
-    
+        comment += "\n\n" + "\n".join(lo_comments)
 
     return comment
 
@@ -587,37 +606,48 @@ def clear_possible_grade_cells(row):
 
 def find_grade_column_indices(table):
     """
-    Dynamically detect competency columns from headers.
+    Detect competency columns ONLY from the
+    'PC Grade %' row.
     """
 
-    grade_columns = {}
-
     for row in table.rows:
-        for i, cell in enumerate(row.cells):
 
-            text = cell.text.strip().lower()
+        cells = row.cells
 
-            if (
-                "not yet competent" in text
-            ):
+        row_text = " | ".join(
+            cell.text.strip().lower()
+            for cell in cells
+        )
+
+        if "pc grade" not in row_text:
+            continue
+
+        grade_columns = {}
+
+        for i, cell in enumerate(cells):
+
+            text = (
+                cell.text.strip()
+                .lower()
+                .replace("–", "-")
+                .replace("—", "-")
+            )
+
+            if "0" in text and "59" in text:
                 grade_columns["Not Yet Competent"] = i
 
-            elif (
-                text == "competent"
-            ):
+            elif "60" in text and "69" in text:
                 grade_columns["Competent"] = i
 
-            elif (
-                "competent with merit" in text
-            ):
+            elif "70" in text and "84" in text:
                 grade_columns["Competent with Merit"] = i
 
-            elif (
-                "competent with distinction" in text
-            ):
+            elif "85" in text and "100" in text:
                 grade_columns["Competent with Distinction"] = i
 
-    return grade_columns
+        if grade_columns:
+            return grade_columns
+
 
 
 def fill_marks_in_assessment_table(table, pc_marks):
