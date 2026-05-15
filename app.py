@@ -265,7 +265,7 @@ def get_pc_columns(df):
 
 def generate_ai_feedback(first_name, pc, level, rubric_section, max_retries=4):
     prompt = f"""
-You are writing formal assessment feedback for a diploma student.
+You are an experienced engineering assessor writing feedback for a diploma student.
 
 Student first name:
 {first_name}
@@ -281,14 +281,18 @@ Relevant rubric criteria:
 
 Write feedback for the Assessor Feedback section.
 
-Rules:
+Style requirements:
+- Sound natural, human, and supportive.
+- Keep a professional assessor tone.
 - Use the student's first name once at the beginning.
 - Write 1 to 2 sentences only.
-- Match the feedback to the competency level.
-- Explain what the student achieved and what should be improved.
-- Use clear academic language.
-- Do not mention AI, rubric file, automated marking, or the exact numerical mark.
-- Do not include bullet points.
+- Do not sound robotic or generic.
+- Mention one specific strength based on the level.
+- Mention one clear improvement area.
+- Do not mention AI, automated marking, rubric file, or the exact numerical mark.
+- Do not use bullet points.
+- Do not overpraise if the level is low.
+- Keep the language suitable for official assessment feedback.
 """
 
     for attempt in range(max_retries):
