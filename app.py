@@ -15,7 +15,7 @@ from openai import OpenAI, RateLimitError, APIError, APITimeoutError
 
 st.set_page_config(page_title="AI Feedback Generator", layout="wide")
 st.title("AI Student Feedback Generator from Marks and Rubric")
-
+assessor_name = st.text_input("Assessor Name")
 feedback_mode = st.radio(
     "Feedback generation mode",
     options=[
@@ -27,7 +27,17 @@ feedback_mode = st.radio(
 
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
+def fill_assessor_name_in_table(table, assessor_name):
+    if not assessor_name:
+        return
 
+    for row in table.rows:
+        fill_adjacent_or_empty(
+            row=row,
+            label_keywords=["Assessor Name"],
+            value=assessor_name
+        )
+        
 def get_level(mark):
     mark = float(mark)
     if mark < 60:
@@ -241,6 +251,7 @@ def build_summative_comment(student_name, overall_level, sa_number, feedback_row
         for row in feedback_rows
         if row["Level"] == "Not Yet Competent"
     ]
+    first_name = get_first_name(student_name)
 
     if failed_pcs:
         failed_text = ", ".join(failed_pcs)
@@ -250,7 +261,7 @@ def build_summative_comment(student_name, overall_level, sa_number, feedback_row
         )
 
     return (
-        f"{student_name}, you have achieved an overall {overall_level} grade "
+        f"{first_name}, you have achieved an overall {overall_level} grade "
         f"in SA{sa_number}."
     )
 
@@ -652,7 +663,7 @@ def insert_feedback_table_at_assessor_feedback(doc, feedback_rows, student_name,
     return doc
 
 
-def fill_template(doc, student_name, student_id, feedback_rows):
+def fill_template(doc, student_name, student_id, assessor_name, feedback_rows):
     pc_marks = {
         normalize_pc_for_matching(row["PC"]): row["Mark"]
         for row in feedback_rows
@@ -680,12 +691,14 @@ def fill_template(doc, student_name, student_id, feedback_rows):
 
         if is_ack_table:
             fill_name_and_id_in_table(table, student_name, student_id)
+            fill_assessor_name_in_table(table, assessor_name)
             continue
 
         if is_assessment_table:
             fill_name_and_id_in_table(table, student_name, student_id)
             fill_marks_in_assessment_table(table, pc_marks)
             fill_summative_grade_in_table(table, pc_marks)
+            fill_assessor_name_in_table(table, assessor_name)
 
     overall_level = get_overall_level_from_marks(pc_marks)
     sa_number = extract_sa_number_from_doc(doc)
