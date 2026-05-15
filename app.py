@@ -289,7 +289,7 @@ def fill_marks_in_assessment_table(table, pc_marks):
         target_col = get_grade_column_index(mark)
 
         if target_col < len(cells):
-            cells[target_col].text = str(int(mark))
+            cells[target_col + 1].text = str(int(mark))
 
 
 def fill_summative_grade_in_table(table, pc_marks):
@@ -308,7 +308,7 @@ def fill_summative_grade_in_table(table, pc_marks):
 
         for i, cell in enumerate(cells):
             if "Summative Assessment Grade %:" in cell.text:
-                if i + 1 < len(cells):
+                if i + 2 < len(cells):
                     cells[i + 2].text = str(int(summative))
                 return
 
@@ -370,7 +370,7 @@ def insert_feedback_table_at_assessor_feedback(doc, feedback_rows):
                     target_index = i + 1 if i + 1 < len(cells) else i
 
                     build_feedback_table_in_cell(
-                        cells[target_index],
+                        cells[target_index+1],
                         feedback_rows
                     )
 
