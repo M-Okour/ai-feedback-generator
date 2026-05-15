@@ -339,7 +339,7 @@ def fill_name_and_id_in_table(table, student_name, student_id):
 
             if text in ["Student Name", "Student Name:"]:
                 if i + 1 < len(cells):
-                    cells[i + 1].text = str(student_name)
+                    cells[i + 2].text = str(student_name)
 
             if text in ["ID No.", "ID No", "Student ID", "Student ID:"]:
                 if i + 1 < len(cells):
@@ -358,7 +358,7 @@ def fill_marks_in_assessment_table(table, pc_marks):
                 target_col = get_grade_column_index(mark)
 
                 if target_col < len(cells):
-                    cells[target_col].text = str(int(mark))
+                    cells[target_col+1].text = str(int(mark))
 
 
 def fill_summative_grade_in_table(table, pc_marks):
@@ -376,7 +376,7 @@ def fill_summative_grade_in_table(table, pc_marks):
         cells = row.cells
 
         for i, cell in enumerate(cells):
-            if "Summative Assessment Grade" in cell.text:
+            if "Summative Assessment Grade %:" in cell.text:
                 if i + 1 < len(cells):
                     cells[i + 1].text = str(int(summative))
                 return
