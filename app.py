@@ -190,6 +190,69 @@ def get_pc_columns(df):
 
     return pc_cols
 
+def get_overall_level_from_marks(pc_marks):
+    marks = [float(m) for m in pc_marks.values()]
+
+    if not marks:
+        return "Not Yet Competent"
+
+    if any(m < 60 for m in marks):
+        return "Not Yet Competent"
+
+    average = round(sum(marks) / len(marks))
+
+    return get_level(average)
+
+
+def extract_sa_number_from_doc(doc):
+    """
+    Looks for titles like:
+    Summative Assessment 1
+    SUMMATIVE ASSESSMENT 2
+    SA1
+    SA 2
+    """
+
+    full_text = []
+
+    for p in doc.paragraphs:
+        full_text.append(p.text)
+
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                full_text.append(cell.text)
+
+    text = "\n".join(full_text)
+
+    match = re.search(r"Summative\s+Assessment\s+(\d+)", text, flags=re.IGNORECASE)
+    if match:
+        return match.group(1)
+
+    match = re.search(r"\bSA\s*(\d+)\b", text, flags=re.IGNORECASE)
+    if match:
+        return match.group(1)
+
+    return ""
+
+def build_summative_comment(student_name, overall_level, sa_number, feedback_rows):
+    failed_pcs = [
+        row["PC"]
+        for row in feedback_rows
+        if row["Level"] == "Not Yet Competent"
+    ]
+
+    if failed_pcs:
+        failed_text = ", ".join(failed_pcs)
+        return (
+            f"{student_name}, you have achieved an overall {overall_level} grade "
+            f"in SA{sa_number}. Please see the feedback for {failed_text}."
+        )
+
+    return (
+        f"{student_name}, you have achieved an overall {overall_level} grade "
+        f"in SA{sa_number}."
+    )
 
 def generate_ai_feedback(first_name, pc, level, rubric_section, max_retries=4):
     prompt = f"""
@@ -444,17 +507,12 @@ def fill_summative_grade_in_table(table, pc_marks):
     for row in table.rows:
         text = row_full_text(row)
 
-        if "Summative Assessment Grade" in text:
+        if "Summative Assessment Grade %:" in text:
             filled = fill_adjacent_or_empty(
                 row=row,
                 label_keywords=["Summative Assessment Grade %:"],
                 value=int(summative)
             )
-
-            if not filled:
-                cells = row.cells
-                if len(cells) > 1:
-                    cells[-1].text = str(int(summative))
 
             return
 
@@ -498,10 +556,20 @@ def build_feedback_table_in_cell(cell, feedback_rows):
         set_cell_width(row[1], 1.35)
         set_cell_width(row[2], 4.4)
 
+        comment = build_summative_comment(
+            student_name=student_name,
+            overall_level=overall_level,
+            sa_number=sa_number,
+            feedback_rows=feedback_rows
+        )
+    
+        cell.add_paragraph("")
+        cell.add_paragraph(comment)
+
     return table
 
 
-def insert_feedback_table_at_assessor_feedback(doc, feedback_rows):
+def insert_feedback_table_at_assessor_feedback(doc, feedback_rows, student_name, overall_level, sa_number):
     feedback_inserted = False
 
     for table in doc.tables:
@@ -523,7 +591,10 @@ def insert_feedback_table_at_assessor_feedback(doc, feedback_rows):
 
                     build_feedback_table_in_cell(
                         target_cell,
-                        feedback_rows
+                        feedback_rows,
+                        student_name,
+                        overall_level,
+                        sa_number
                     )
 
                     feedback_inserted = True
@@ -600,6 +671,8 @@ def fill_template(doc, student_name, student_id, feedback_rows):
             fill_marks_in_assessment_table(table, pc_marks)
             fill_summative_grade_in_table(table, pc_marks)
 
+    overall_level = get_overall_level_from_marks(pc_marks)
+    sa_number = extract_sa_number_from_doc(doc)
     doc = insert_feedback_table_at_assessor_feedback(doc, feedback_rows)
 
     return doc
