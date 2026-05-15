@@ -374,16 +374,16 @@ def find_grade_column_indices(table):
         for i, cell in enumerate(row.cells):
             text = cell.text.strip().lower()
 
-            if "not yet competent" in text or "0" in text and "59" in text:
+            if "Not Yet competent" in text or "0" in text and "59" in text:
                 grade_columns["Not Yet Competent"] = i
 
             elif text == "competent" or "60" in text and "69" in text:
                 grade_columns["Competent"] = i
 
-            elif "competent with merit" in text or "70" in text and "84" in text:
+            elif "Competent with Merit" in text or "70" in text and "84" in text:
                 grade_columns["Competent with Merit"] = i
 
-            elif "competent with distinction" in text or "85" in text and "100" in text:
+            elif "Competent with Distinction" in text or "85" in text and "100" in text:
                 grade_columns["Competent with Distinction"] = i
 
     return grade_columns
@@ -447,7 +447,7 @@ def fill_summative_grade_in_table(table, pc_marks):
         if "Summative Assessment Grade" in text:
             filled = fill_adjacent_or_empty(
                 row=row,
-                label_keywords=["Summative Assessment Grade"],
+                label_keywords=["Summative Assessment Grade %:"],
                 value=int(summative)
             )
 
