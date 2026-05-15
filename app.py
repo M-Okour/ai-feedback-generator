@@ -133,21 +133,7 @@ def build_lo_comments(feedback_rows, lo_data):
         comments.append(comment)
 
     return comments
-def format_cell_paragraphs(cell, font_size=9, cell_width=1.0):
-    """
-    Removes spacing before/after paragraphs inside table cells.
-    """
-    set_cell_width(cell, cell_width)
-    for paragraph in cell.paragraphs:
-        paragraph.paragraph_format.space_before = Pt(0)
-        paragraph.paragraph_format.space_after = Pt(0)
-        paragraph.paragraph_format.line_spacing = 1
 
-        if paragraph.runs:
-            for run in paragraph.runs:
-                run.font.size = Pt(font_size)
-
-        paragraph.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
         
 def fill_assessor_name_in_table(table, assessor_name):
     """
@@ -177,18 +163,6 @@ def get_level(mark):
     elif mark < 85:
         return "Competent with Merit"
     return "Competent with Distinction"
-
-
-def get_grade_column_index(mark):
-    mark = float(mark)
-    if mark < 60:
-        return 2
-    elif mark < 70:
-        return 3
-    elif mark < 85:
-        return 4
-    return 5
-
 
 def get_first_name(full_name):
     if pd.isna(full_name):
@@ -592,22 +566,6 @@ def get_row_pc(row, pc_marks):
     return None
 
 
-def clear_possible_grade_cells(row):
-    """
-    Clears likely grade cells in a PC row before filling the correct one.
-    This prevents old placeholder marks from remaining.
-    Assumes columns 2-5 are grade-band columns when available.
-    """
-
-    cells = row.cells
-
-    for idx in [2, 3, 4, 5]:
-        if idx < len(cells):
-            # Do not clear if the cell itself contains a PC code
-            if not normalize_pc_for_matching(cells[idx].text).startswith("PC"):
-                cells[idx].text = ""
-
-
 def find_grade_column_indices(table):
     """
     Detect competency columns ONLY from the
@@ -718,20 +676,6 @@ def fill_summative_grade_in_table(table, pc_marks):
 
             return
 
-
-def set_cell_width(cell, width_inches):
-    tc = cell._tc
-    tc_pr = tc.get_or_add_tcPr()
-    tc_w = tc_pr.first_child_found_in("w:tcW")
-
-    if tc_w is None:
-        tc_w = OxmlElement("w:tcW")
-        tc_pr.append(tc_w)
-
-    tc_w.set(qn("w:w"), str(int(width_inches * 1440)))
-    tc_w.set(qn("w:type"), "dxa")
-
-
 def build_feedback_table_in_cell(
     cell,
     feedback_rows,
@@ -743,42 +687,49 @@ def build_feedback_table_in_cell(
 ):
     cell.text = ""
 
-    table = cell.add_table(rows=1, cols=3)
-    table.style = "Table Grid"
-    table.autofit = False
-
-    header = table.rows[0].cells
-    header[0].text = "PC"
-    header[1].text = "Level"
-    header[2].text = "Feedback"
-    format_cell_paragraphs(header[0], 9, 0.75)
-    format_cell_paragraphs(header[1], 9, 1.35)
-    format_cell_paragraphs(header[2], 9, 4.40)
-
-    set_cell_width(header[0], 0.75)
-    set_cell_width(header[1], 1.35)
-    set_cell_width(header[2], 4.4)
+    # -------------------------------------------------
+    # Individual PC feedback
+    # -------------------------------------------------
 
     for row_data in feedback_rows:
 
-        row = table.add_row().cells
+        pc = row_data["PC"]
+        level = row_data["Level"]
+        feedback = row_data["Feedback"]
 
-        row[0].text = row_data["PC"]
-        row[1].text = row_data["Level"]
-        row[2].text = (
-            row_data["Feedback"]
-            if str(row_data["Feedback"]).strip()
-            else ""
-        )
+        # Skip empty feedback rows if desired
+        if not str(feedback).strip():
+            continue
 
-        # format_cell_paragraphs("row number", "font size", "cell width")
-        format_cell_paragraphs(row[0], 9, 0.75)
-        format_cell_paragraphs(row[1], 9, 1.35)
-        format_cell_paragraphs(row[2], 9, 4.40)
-        
+        # ---------------------------------------------
+        # Heading
+        # ---------------------------------------------
+
+        heading = cell.add_paragraph()
+
+        heading.paragraph_format.space_before = Pt(0)
+        heading.paragraph_format.space_after = Pt(0)
+        heading.paragraph_format.line_spacing = 1
+
+        run = heading.add_run(f"{pc}: {level}:")
+        run.bold = True
+        run.font.size = Pt(9)
+
+        # ---------------------------------------------
+        # Feedback paragraph
+        # ---------------------------------------------
+
+        p = cell.add_paragraph(feedback)
+
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after = Pt(4)
+        p.paragraph_format.line_spacing = 1
+
+        for r in p.runs:
+            r.font.size = Pt(9)
 
     # -------------------------------------------------
-    # Summative comment BELOW the table
+    # Summative comment
     # -------------------------------------------------
 
     comment = build_summative_comment(
@@ -790,13 +741,16 @@ def build_feedback_table_in_cell(
         lo_data=lo_data
     )
 
- 
-    p = cell.add_paragraph(comment)
-    p.paragraph_format.space_before = Pt(0)
-    p.paragraph_format.space_after = Pt(0)
-    p.paragraph_format.line_spacing = 1
-    
-    return table
+    summary_p = cell.add_paragraph(comment)
+
+    summary_p.paragraph_format.space_before = Pt(2)
+    summary_p.paragraph_format.space_after = Pt(0)
+    summary_p.paragraph_format.line_spacing = 1
+
+    for r in summary_p.runs:
+        r.font.size = Pt(9)
+
+    return
 
 
 def insert_feedback_table_at_assessor_feedback(
@@ -855,32 +809,21 @@ def insert_feedback_table_at_assessor_feedback(
         if feedback_inserted:
             break
 
+
     if not feedback_inserted:
-        doc.add_paragraph("")
-        doc.add_paragraph("Assessor Feedback:")
 
-        fallback_table = doc.add_table(rows=1, cols=3)
-        fallback_table.style = "Table Grid"
-        fallback_table.autofit = False
-
-        header = fallback_table.rows[0].cells
-        header[0].text = "PC"
-        header[1].text = "Level"
-        header[2].text = "Feedback"
-
-        set_cell_width(header[0], 0.75)
-        set_cell_width(header[1], 1.35)
-        set_cell_width(header[2], 5.4)
-
-        for row_data in feedback_rows:
-            row = fallback_table.add_row().cells
-            row[0].text = row_data["PC"]
-            row[1].text = row_data["Level"]
-            row[2].text = row_data["Feedback"]
-
-            set_cell_width(row[0], 0.75)
-            set_cell_width(row[1], 1.35)
-            set_cell_width(row[2], 4.4)
+        p = doc.add_paragraph("Assessor Feedback:")
+        p.runs[0].bold = True
+    
+        build_feedback_table_in_cell(
+            cell=doc.add_table(rows=1, cols=1).cell(0, 0),
+            feedback_rows=feedback_rows,
+            student_name=student_name,
+            overall_level=overall_level,
+            sa_number=sa_number,
+            sa2_date=sa2_date,
+            lo_data=lo_data
+        )
 
     return doc
 
