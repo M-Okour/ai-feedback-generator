@@ -585,25 +585,38 @@ def clear_possible_grade_cells(row):
 
 def find_grade_column_indices(table):
     """
-    Finds grade-band columns from the table header instead of assuming fixed column numbers.
+    Dynamically detect competency columns from headers.
     """
 
     grade_columns = {}
 
     for row in table.rows:
         for i, cell in enumerate(row.cells):
+
             text = cell.text.strip().lower()
 
-            if "not Yet competent" in text or "0" in text and "59" in text:
+            if (
+                "not yet competent" in text
+                or ("0" in text and "59" in text)
+            ):
                 grade_columns["Not Yet Competent"] = i
 
-            elif ("competent" == text) or ("60" in text and "69" in text):
+            elif (
+                text == "competent"
+                or ("60" in text and "69" in text)
+            ):
                 grade_columns["Competent"] = i
 
-            elif ("competent with merit" in text) or ("70" in text and "84" in text):
+            elif (
+                "competent with merit" in text
+                or ("70" in text and "84" in text)
+            ):
                 grade_columns["Competent with Merit"] = i
 
-            elif ("competent with distinction" in text) or ("85" in text and "100" in text):
+            elif (
+                "competent with distinction" in text
+                or ("85" in text and "100" in text)
+            ):
                 grade_columns["Competent with Distinction"] = i
 
     return grade_columns
@@ -706,6 +719,9 @@ def build_feedback_table_in_cell(
     header[0].text = "PC"
     header[1].text = "Level"
     header[2].text = "Feedback"
+    format_cell_paragraphs(header[0], 9, 0.75)
+    format_cell_paragraphs(header[1], 9, 1.35)
+    format_cell_paragraphs(header[2], 9, 4.40)
 
     set_cell_width(header[0], 0.75)
     set_cell_width(header[1], 1.35)
@@ -748,7 +764,15 @@ def build_feedback_table_in_cell(
     return table
 
 
-def insert_feedback_table_at_assessor_feedback(doc, feedback_rows, student_name, overall_level, sa_number, lo_data):
+def insert_feedback_table_at_assessor_feedback(
+    doc,
+    feedback_rows,
+    student_name,
+    overall_level,
+    sa_number,
+    sa2_date,
+    lo_data
+    ):
     feedback_inserted = False
 
     for table in doc.tables:
@@ -774,6 +798,7 @@ def insert_feedback_table_at_assessor_feedback(doc, feedback_rows, student_name,
                         student_name,
                         overall_level,
                         sa_number,
+                        sa2_date,
                         lo_data
                     )
 
@@ -878,10 +903,6 @@ if st.button("Generate AI Feedback Files"):
     if not rubric_file or not classlist_file or not template_file:
         st.error("Please upload rubric, classlist, and feedback template.")
         st.stop()
-
-    rubric_text = read_docx_text(rubric_file)
-    pc_list = extract_pc_list_from_rubric(rubric_text)
-    rubric_sections = extract_rubric_sections(rubric_text, pc_list)
 
     rubric_text = read_docx_text(rubric_file)
     pc_list = extract_pc_list_from_rubric(rubric_text)
