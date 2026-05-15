@@ -772,19 +772,21 @@ def build_feedback_table_in_cell(
     # Final overall comment
     # -------------------------------------------------
     
+    blank_p = cell.add_paragraph("")
+    blank_p.paragraph_format.space_before = Pt(0)
+    blank_p.paragraph_format.space_after = Pt(0)
+    blank_p.paragraph_format.line_spacing = 1
     summary_p = cell.add_paragraph(
         comment_data["summary_comment"]
     )
     
-    summary_p.paragraph_format.space_before = Pt(2)
+    summary_p.paragraph_format.space_before = Pt(0)
     summary_p.paragraph_format.space_after = Pt(0)
     summary_p.paragraph_format.line_spacing = 1
     
     for r in summary_p.runs:
-        r.font.size = Pt(9)
+        r.font.size = Pt(10)
     
-    return
-
     return
 
 
