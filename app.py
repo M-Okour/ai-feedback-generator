@@ -812,6 +812,7 @@ if st.button("Generate AI Feedback Files"):
                 doc=doc,
                 student_name=student_name,
                 student_id=student_id,
+                assessor_name=assessor_name,
                 feedback_rows=feedback_rows
             )
 
