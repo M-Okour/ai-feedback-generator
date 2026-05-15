@@ -437,16 +437,16 @@ def find_grade_column_indices(table):
         for i, cell in enumerate(row.cells):
             text = cell.text.strip().lower()
 
-            if "Not Yet competent" in text or "0" in text and "59" in text:
+            if "not Yet competent" in text or "0" in text and "59" in text:
                 grade_columns["Not Yet Competent"] = i
 
-            elif text == "competent" or "60" in text and "69" in text:
+            elif ("competent" == text) or ("60" in text and "69" in text):
                 grade_columns["Competent"] = i
 
-            elif "Competent with Merit" in text or "70" in text and "84" in text:
+            elif ("competent with merit" in text) or ("70" in text and "84" in text):
                 grade_columns["Competent with Merit"] = i
 
-            elif "Competent with Distinction" in text or "85" in text and "100" in text:
+            elif ("competent with distinction" in text) or ("85" in text and "100" in text):
                 grade_columns["Competent with Distinction"] = i
 
     return grade_columns
@@ -530,7 +530,13 @@ def set_cell_width(cell, width_inches):
     tc_w.set(qn("w:type"), "dxa")
 
 
-def build_feedback_table_in_cell(cell, feedback_rows):
+def build_feedback_table_in_cell(
+    cell,
+    feedback_rows,
+    student_name,
+    overall_level,
+    sa_number
+):
     cell.text = ""
 
     table = cell.add_table(rows=1, cols=3)
@@ -547,24 +553,34 @@ def build_feedback_table_in_cell(cell, feedback_rows):
     set_cell_width(header[2], 4.4)
 
     for row_data in feedback_rows:
+
         row = table.add_row().cells
+
         row[0].text = row_data["PC"]
         row[1].text = row_data["Level"]
-        row[2].text = row_data["Feedback"]
+        row[2].text = (
+            row_data["Feedback"]
+            if str(row_data["Feedback"]).strip()
+            else ""
+        )
 
         set_cell_width(row[0], 0.75)
         set_cell_width(row[1], 1.35)
         set_cell_width(row[2], 4.4)
 
-        comment = build_summative_comment(
-            student_name=student_name,
-            overall_level=overall_level,
-            sa_number=sa_number,
-            feedback_rows=feedback_rows
-        )
-    
-        cell.add_paragraph("")
-        cell.add_paragraph(comment)
+    # -------------------------------------------------
+    # Summative comment BELOW the table
+    # -------------------------------------------------
+
+    comment = build_summative_comment(
+        student_name=student_name,
+        overall_level=overall_level,
+        sa_number=sa_number,
+        feedback_rows=feedback_rows
+    )
+
+    cell.add_paragraph("")
+    cell.add_paragraph(comment)
 
     return table
 
