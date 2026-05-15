@@ -741,14 +741,44 @@ def build_feedback_table_in_cell(
         lo_data=lo_data
     )
 
-    summary_p = cell.add_paragraph(comment)
+    for lo_comment in comment_data["lo_comments"]:
 
-    summary_p.paragraph_format.space_before = Pt(2)
-    summary_p.paragraph_format.space_after = Pt(0)
-    summary_p.paragraph_format.line_spacing = 1
-
-    for r in summary_p.runs:
-        r.font.size = Pt(9)
+        p = cell.add_paragraph()
+    
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after = Pt(0)
+        p.paragraph_format.line_spacing = 1
+    
+        match = re.match(r"(LO\d+:)(.*)", lo_comment)
+    
+        if match:
+    
+            lo_label = match.group(1)
+            lo_text = match.group(2).strip()
+    
+            run1 = p.add_run(lo_label + " ")
+            run1.bold = True
+            run1.font.size = Pt(9)
+    
+            run2 = p.add_run(lo_text)
+            run2.font.size = Pt(9)
+    
+        else:
+            run = p.add_run(lo_comment)
+            run.font.size = Pt(9)
+    
+        # -------------------------------------------------
+        # Final overall comment
+        # -------------------------------------------------
+        
+        summary_p = cell.add_paragraph(comment_data["summary_comment"])
+        
+        summary_p.paragraph_format.space_before = Pt(2)
+        summary_p.paragraph_format.space_after = Pt(0)
+        summary_p.paragraph_format.line_spacing = 1
+        
+        for r in summary_p.runs:
+            r.font.size = Pt(9)
 
     return
 
