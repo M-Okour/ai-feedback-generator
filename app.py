@@ -373,21 +373,21 @@ def build_summative_comment(
 
         failed_text = ", ".join(failed_pcs)
 
-        comment = (
+        summary_comment = (
             f"{first_name}, you have achieved an overall "
             f"{overall_level} grade in SA{sa_number}. "
             f"Please see the feedback for {failed_text}."
         )
 
         if sa2_date.strip():
-            comment += (
+            summary_comment += (
                 f" The second attempt will be conducted on "
                 f"{sa2_date}."
             )
 
     else:
 
-        comment = (
+        summary_comment = (
             f"{first_name}, you have achieved an overall "
             f"{overall_level} grade in SA{sa_number}."
         )
@@ -401,14 +401,10 @@ def build_summative_comment(
         lo_data=lo_data
     )
 
-    if lo_comments:
-        comment = (
-            "\n".join(lo_comments)
-            + "\n\n"
-            + comment
-        )
-
-    return comment
+    return {
+        "lo_comments": lo_comments,
+        "summary_comment": summary_comment
+    }
 
 def generate_ai_feedback(first_name, pc, level, rubric_section, max_retries=4):
     prompt = f"""
@@ -731,8 +727,8 @@ def build_feedback_table_in_cell(
     # -------------------------------------------------
     # Summative comment
     # -------------------------------------------------
-
-    comment = build_summative_comment(
+    
+    comment_data = build_summative_comment(
         student_name=student_name,
         overall_level=overall_level,
         sa_number=sa_number,
@@ -740,9 +736,13 @@ def build_feedback_table_in_cell(
         sa2_date=sa2_date,
         lo_data=lo_data
     )
-
+    
+    # -------------------------------------------------
+    # LO comments with bold LO1:, LO2:
+    # -------------------------------------------------
+    
     for lo_comment in comment_data["lo_comments"]:
-
+    
         p = cell.add_paragraph()
     
         p.paragraph_format.space_before = Pt(0)
@@ -764,21 +764,26 @@ def build_feedback_table_in_cell(
             run2.font.size = Pt(9)
     
         else:
+    
             run = p.add_run(lo_comment)
             run.font.size = Pt(9)
     
-        # -------------------------------------------------
-        # Final overall comment
-        # -------------------------------------------------
-        
-        summary_p = cell.add_paragraph(comment_data["summary_comment"])
-        
-        summary_p.paragraph_format.space_before = Pt(2)
-        summary_p.paragraph_format.space_after = Pt(0)
-        summary_p.paragraph_format.line_spacing = 1
-        
-        for r in summary_p.runs:
-            r.font.size = Pt(9)
+    # -------------------------------------------------
+    # Final overall comment
+    # -------------------------------------------------
+    
+    summary_p = cell.add_paragraph(
+        comment_data["summary_comment"]
+    )
+    
+    summary_p.paragraph_format.space_before = Pt(2)
+    summary_p.paragraph_format.space_after = Pt(0)
+    summary_p.paragraph_format.line_spacing = 1
+    
+    for r in summary_p.runs:
+        r.font.size = Pt(9)
+    
+    return
 
     return
 
