@@ -343,7 +343,7 @@ def fill_name_and_id_in_table(table, student_name, student_id):
 
             if text in ["ID No.", "ID No", "Student ID", "Student ID:"]:
                 if i + 1 < len(cells):
-                    cells[i + 1].text = str(student_id)
+                    cells[i + 2].text = str(student_id)
 
 
 def fill_marks_in_assessment_table(table, pc_marks):
