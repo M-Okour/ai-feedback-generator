@@ -10,7 +10,14 @@ from openai import OpenAI, RateLimitError, APIError, APITimeoutError
 
 st.set_page_config(page_title="AI Feedback Generator", layout="wide")
 st.title("AI Student Feedback Generator from Marks and Rubric")
-
+feedback_mode = st.radio(
+    "Feedback generation mode",
+    options=[
+        "Generate feedback for all PCs",
+        "Generate feedback only for Not Yet Competent PCs"
+    ],
+    index=0
+)
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 
@@ -450,6 +457,9 @@ def fill_template(doc, student_name, student_id, feedback_rows):
     header[2].text = "Feedback"
 
     for row_data in feedback_rows:
+        if not row_data["Feedback"].strip():
+            continue
+            
         row = feedback_table.add_row().cells
         row[0].text = row_data["PC"]
         row[1].text = row_data["Level"]
@@ -526,20 +536,29 @@ if st.button("Generate AI Feedback Files"):
                 level = get_level(mark)
                 rubric_section = rubric_sections.get(pc, "")
 
-                feedback = generate_ai_feedback(
-                    first_name=first_name,
-                    pc=pc,
-                    level=level,
-                    rubric_section=rubric_section
-                )
-
+                should_generate_feedback = (
+                    feedback_mode == "Generate feedback for all PCs"
+                    or level == "Not Yet Competent")
+                
+                if should_generate_feedback:
+                
+                    feedback = generate_ai_feedback(
+                        first_name=first_name,
+                        pc=pc,
+                        level=level,
+                        rubric_section=rubric_section
+                    )
+                
+                else:
+                    feedback = ""
+                
                 feedback_rows.append({
                     "PC": pc,
                     "Mark": mark,
                     "Level": level,
                     "Feedback": feedback
                 })
-
+                
                 summary_rows.append({
                     "Student Name": student_name,
                     "Student ID": student_id,
