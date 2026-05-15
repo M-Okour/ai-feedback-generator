@@ -384,6 +384,14 @@ def build_summative_comment(student_name, overall_level, sa_number, feedback_row
 
     first_name = get_first_name(student_name)
 
+    lo_comments = build_lo_comments(
+        feedback_rows=feedback_rows,
+        lo_data=lo_data
+    )
+
+    if lo_comments:
+        comment += "\n" + "\n".join(lo_comments)
+        
     if failed_pcs:
         failed_text = ", ".join(failed_pcs)
 
@@ -401,13 +409,7 @@ def build_summative_comment(student_name, overall_level, sa_number, feedback_row
             f"in SA{sa_number}."
         )
 
-    lo_comments = build_lo_comments(
-        feedback_rows=feedback_rows,
-        lo_data=lo_data
-    )
-
-    if lo_comments:
-        comment += "\n" + "\n".join(lo_comments)
+    
 
     return comment
 
