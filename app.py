@@ -363,39 +363,71 @@ def clear_possible_grade_cells(row):
                 cells[idx].text = ""
 
 
-def fill_marks_in_assessment_table(table, pc_marks):
+def find_grade_column_indices(table):
     """
-    Fills the mark in the correct grade-band column.
-
-    Expected visual structure:
-    col 0 = LO & PC
-    col 1 = Grade Classification
-    col 2 = Not Yet Competent
-    col 3 = Competent
-    col 4 = Competent with Merit
-    col 5 = Competent with Distinction
-
-    Merged header cells may exist, but PC rows usually still preserve row cells.
+    Finds grade-band columns from the table header instead of assuming fixed column numbers.
     """
+
+    grade_columns = {}
 
     for row in table.rows:
-        row_pc = get_row_pc(row, pc_marks)
+        for i, cell in enumerate(row.cells):
+            text = cell.text.strip().lower()
+
+            if "not yet competent" in text or "0" in text and "59" in text:
+                grade_columns["Not Yet Competent"] = i
+
+            elif text == "competent" or "60" in text and "69" in text:
+                grade_columns["Competent"] = i
+
+            elif "competent with merit" in text or "70" in text and "84" in text:
+                grade_columns["Competent with Merit"] = i
+
+            elif "competent with distinction" in text or "85" in text and "100" in text:
+                grade_columns["Competent with Distinction"] = i
+
+    return grade_columns
+
+
+def fill_marks_in_assessment_table(table, pc_marks):
+    """
+    Search row by PC number and column by grade level,
+    then fill the mark at the row-column intersection.
+    """
+
+    grade_columns = find_grade_column_indices(table)
+
+    for row in table.rows:
+        cells = row.cells
+
+        # Find PC in this row
+        row_pc = None
+
+        for cell in cells:
+            normalized_pc = normalize_pc_for_matching(cell.text)
+
+            if normalized_pc in pc_marks:
+                row_pc = normalized_pc
+                break
 
         if row_pc is None:
             continue
 
         mark = pc_marks[row_pc]
-        target_col = get_grade_column_index(mark)
+        level = get_level(mark)
 
-        clear_possible_grade_cells(row)
+        if level not in grade_columns:
+            continue
 
-        cells = row.cells
+        target_col = grade_columns[level]
 
         if target_col < len(cells):
+            # Optional: clear grade-band cells first
+            for col in grade_columns.values():
+                if col < len(cells):
+                    cells[col].text = ""
+
             cells[target_col].text = str(int(mark))
-        else:
-            # fallback: first empty cell after the PC cell
-            fill_first_empty_cell_in_row(row, str(int(mark)), start_index=1)
 
 
 def fill_summative_grade_in_table(table, pc_marks):
