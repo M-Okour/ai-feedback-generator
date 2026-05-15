@@ -68,21 +68,41 @@ def get_first_name(full_name):
 
 def normalize_pc_for_matching(text):
     """
-    Converts:
-    E1:PC1      -> PC1
-    E3:PC3.1    -> PC3.1
-    PC3.1       -> PC3.1
+    Converts all PC formats into canonical format:
+
+    E1:PC1
+    E3:PC3.1
+    E4:PC4.2
+
+    Supported inputs:
+    E1:PC1
+    E1 PC1
+    PC1
+    PC3.1
+    3.1
+    E3:PC3.1
     """
 
     text = str(text).upper().replace(" ", "")
 
-    match = re.search(r"E\d+:?(PC\d+(?:\.\d+)?)", text)
+    # Already full format
+    match = re.search(r"E(\d+):?PC(\d+(?:\.\d+)?)", text)
     if match:
-        return match.group(1)
+        return f"E{match.group(1)}:PC{match.group(2)}"
 
-    match = re.search(r"(PC\d+(?:\.\d+)?)", text)
+    # PC3.1
+    match = re.search(r"PC(\d+(?:\.\d+)?)", text)
     if match:
-        return match.group(1)
+        pc_number = match.group(1)
+        element = pc_number.split(".")[0]
+        return f"E{element}:PC{pc_number}"
+
+    # 3.1
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)", text)
+    if match:
+        pc_number = match.group(1)
+        element = pc_number.split(".")[0]
+        return f"E{element}:PC{pc_number}"
 
     return text
 
