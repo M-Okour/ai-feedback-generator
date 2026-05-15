@@ -428,7 +428,11 @@ def build_summative_comment(
     )
 
     if lo_comments:
-        comment += "\n\n" + "\n".join(lo_comments)
+        comment = (
+            "\n".join(lo_comments)
+            + "\n\n"
+            + comment
+        )
 
     return comment
 
@@ -809,17 +813,26 @@ def insert_feedback_table_at_assessor_feedback(
 
             for i, cell in enumerate(cells):
                 if "Assessor Feedback:" in cell.text or "Assessor Feedback" in cell.text:
-                    # Prefer an empty cell after the label
-                    target_cell = None
+                    target_row_index = row._tr.getparent().index(row._tr) + 1
 
-                    for j in range(i + 1, len(cells)):
-                        if is_empty_cell(cells[j]):
-                            target_cell = cells[j]
-                            break
-
-                    if target_cell is None:
-                        target_cell = cells[i]
-
+                    if target_row_index < len(table.rows):
+                        next_row = table.rows[target_row_index]
+                        # Prefer first empty cell in next row
+                        target_cell = None
+                
+                        for next_cell in next_row.cells:
+                            if is_empty_cell(next_cell):
+                                target_cell = next_cell
+                                break
+                
+                        # fallback = first cell of next row
+                        if target_cell is None:
+                            target_cell = next_row.cells[0]
+                
+                    else:
+                        # fallback = current cell
+                        target_cell = cell
+                
                     build_feedback_table_in_cell(
                         target_cell,
                         feedback_rows,
@@ -829,7 +842,7 @@ def insert_feedback_table_at_assessor_feedback(
                         sa2_date,
                         lo_data
                     )
-
+                
                     feedback_inserted = True
                     break
 
