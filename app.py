@@ -165,7 +165,7 @@ def fill_assessor_name_in_table(table, assessor_name):
         for cell in row.cells:
             text = cell.text.strip()
 
-            if "Assessor Name:" in text or "Assessor Name" in text:
+            if "Assessor Name:" in text:
                 cell.text = f"Assessor Name: {assessor_name}"
         
 def get_level(mark):
@@ -813,7 +813,7 @@ def insert_feedback_table_at_assessor_feedback(
 
             for i, cell in enumerate(cells):
                 if "Assessor Feedback:" in cell.text or "Assessor Feedback" in cell.text:
-                    target_row_index = row._tr.getparent().index(row._tr) + 1
+                    target_row_index = row._tr.getparent().index(row._tr)
 
                     if target_row_index < len(table.rows):
                         next_row = table.rows[target_row_index]
