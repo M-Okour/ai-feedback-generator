@@ -68,41 +68,34 @@ def get_first_name(full_name):
 
 def normalize_pc_for_matching(text):
     """
-    Converts all PC formats into canonical format:
+    Converts PC formats into standard PCx.y format.
 
-    E1:PC1
-    E3:PC3.1
-    E4:PC4.2
-
-    Supported inputs:
-    E1:PC1
-    E1 PC1
-    PC1
-    PC3.1
-    3.1
-    E3:PC3.1
+    Examples:
+    E1:PC1  -> PC1.1
+    E1:PC2  -> PC1.2
+    E2:PC1  -> PC2.1
+    PC1.1   -> PC1.1
+    PC3.2   -> PC3.2
     """
 
     text = str(text).upper().replace(" ", "")
 
-    # Already full format
-    match = re.search(r"E(\d+):?PC(\d+(?:\.\d+)?)", text)
+    # Match Ex:PCy format
+    match = re.search(r"E(\d+):?PC(\d+)$", text)
     if match:
-        return f"E{match.group(1)}:PC{match.group(2)}"
+        element = match.group(1)
+        pc = match.group(2)
+        return f"PC{element}.{pc}"
 
-    # PC3.1
-    match = re.search(r"PC(\d+(?:\.\d+)?)", text)
+    # Match already-normal PCx.y format
+    match = re.search(r"PC(\d+\.\d+)", text)
     if match:
-        pc_number = match.group(1)
-        element = pc_number.split(".")[0]
-        return f"E{element}:PC{pc_number}"
+        return f"PC{match.group(1)}"
 
-    # 3.1
-    match = re.fullmatch(r"(\d+(?:\.\d+)?)", text)
+    # Match raw x.y format
+    match = re.fullmatch(r"(\d+\.\d+)", text)
     if match:
-        pc_number = match.group(1)
-        element = pc_number.split(".")[0]
-        return f"E{element}:PC{pc_number}"
+        return f"PC{match.group(1)}"
 
     return text
 
