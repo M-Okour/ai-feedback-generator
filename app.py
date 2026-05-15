@@ -597,25 +597,21 @@ def find_grade_column_indices(table):
 
             if (
                 "not yet competent" in text
-                or ("0" in text and "59" in text)
             ):
                 grade_columns["Not Yet Competent"] = i
 
             elif (
                 text == "competent"
-                or ("60" in text and "69" in text)
             ):
                 grade_columns["Competent"] = i
 
             elif (
                 "competent with merit" in text
-                or ("70" in text and "84" in text)
             ):
                 grade_columns["Competent with Merit"] = i
 
             elif (
                 "competent with distinction" in text
-                or ("85" in text and "100" in text)
             ):
                 grade_columns["Competent with Distinction"] = i
 
