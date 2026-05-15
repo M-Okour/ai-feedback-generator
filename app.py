@@ -1,40 +1,21 @@
 import io
 import re
-import json
 import time
 import zipfile
-
-import streamlit as st
 import pandas as pd
-import fitz
-import pytesseract
-from PIL import Image
+import streamlit as st
 from docx import Document
-from openai import OpenAI
-from openai import RateLimitError, APIError, APITimeoutError
+from openai import OpenAI, RateLimitError, APIError, APITimeoutError
 
 
-# =========================================================
-# Streamlit setup
-# =========================================================
-
-st.set_page_config(page_title="AI Student Exam Feedback Generator", layout="wide")
-st.title("AI Student Exam Feedback Generator")
-
-
-# =========================================================
-# OpenAI client
-# =========================================================
+st.set_page_config(page_title="AI Feedback Generator", layout="wide")
+st.title("AI Student Feedback Generator from Marks and Rubric")
 
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
 
-# =========================================================
-# General helpers
-# =========================================================
-
-def grade_level(mark):
-    mark = int(mark)
+def get_level(mark):
+    mark = float(mark)
 
     if mark < 60:
         return "Not Yet Competent"
@@ -46,173 +27,37 @@ def grade_level(mark):
         return "Competent with Distinction"
 
 
-def normalize_any_pc(text):
-    """
-    Converts:
-    PC3.1      -> E3:PC3.1
-    3.1        -> E3:PC3.1
-    E3:PC3.1   -> E3:PC3.1
-    E 3 : PC 3.1 -> E3:PC3.1
-    """
+def get_first_name(full_name):
+    if pd.isna(full_name):
+        return "Student"
 
-    text = str(text).upper().replace(" ", "")
+    full_name = str(full_name).strip()
 
-    match = re.search(r"E(\d+):?PC(\d+\.\d+)", text)
-    if match:
-        return f"E{match.group(1)}:PC{match.group(2)}"
+    if not full_name:
+        return "Student"
 
-    match = re.search(r"PC(\d+\.\d+)", text)
-    if match:
-        pc_number = match.group(1)
-        element = pc_number.split(".")[0]
-        return f"E{element}:PC{pc_number}"
-
-    match = re.search(r"\b(\d+\.\d+)\b", text)
-    if match:
-        pc_number = match.group(1)
-        element = pc_number.split(".")[0]
-        return f"E{element}:PC{pc_number}"
-
-    return text
+    return full_name.split()[0]
 
 
-def template_pc_label(pc_code):
-    """
-    E3:PC3.1 -> PC3.1
-    """
-    return pc_code.split(":")[-1]
-
-
-def find_student_by_id(df, student_id):
-    student_id = str(student_id).strip()
-
-    for _, row in df.iterrows():
-        values = [str(v).strip() for v in row.values]
-        if student_id in values:
-            return row
-
-    return None
-
-
-def guess_student_name(student_row):
-    possible_columns = [
-        "Student Name",
-        "Name",
-        "Full Name",
-        "Student",
-        "Learner Name",
-        "Student Full Name",
-    ]
-
-    for col in possible_columns:
-        if col in student_row.index:
-            value = str(student_row[col]).strip()
-            if value and value.lower() != "nan":
-                return value
-
-    for value in student_row.values:
-        value = str(value).strip()
-        if value and value.lower() != "nan" and not value.isdigit():
-            if not value.upper().startswith("H00"):
-                return value
-
-    return "Unknown Student"
-
-
-# =========================================================
-# File reading
-# =========================================================
-
-def read_docx_as_text(uploaded_file):
-    uploaded_file.seek(0)
-    doc = Document(uploaded_file)
-
-    text_parts = []
+def read_docx_text(file):
+    file.seek(0)
+    doc = Document(file)
+    parts = []
 
     for p in doc.paragraphs:
         if p.text.strip():
-            text_parts.append(p.text.strip())
+            parts.append(p.text.strip())
 
     for table in doc.tables:
         for row in table.rows:
             row_text = " | ".join(cell.text.strip() for cell in row.cells)
             if row_text.strip():
-                text_parts.append(row_text)
+                parts.append(row_text)
 
-    return "\n".join(text_parts)
+    return "\n".join(parts)
 
-
-def read_pdf_as_text(uploaded_file):
-    uploaded_file.seek(0)
-    pdf_bytes = uploaded_file.read()
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-
-    text = ""
-
-    for page in doc:
-        direct_text = page.get_text()
-
-        if direct_text.strip():
-            text += "\n" + direct_text
-        else:
-            pix = page.get_pixmap(dpi=220)
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            text += "\n" + pytesseract.image_to_string(img)
-
-    return text
-
-
-def read_excel_as_text(uploaded_file):
-    uploaded_file.seek(0)
-    sheets = pd.read_excel(uploaded_file, sheet_name=None)
-
-    text_parts = []
-
-    for sheet_name, df in sheets.items():
-        text_parts.append(f"\n--- Sheet: {sheet_name} ---")
-        text_parts.append(df.to_string(index=False))
-
-    return "\n".join(text_parts)
-
-
-def read_uploaded_file_as_text(uploaded_file):
-    if uploaded_file is None:
-        return ""
-
-    filename = uploaded_file.name.lower()
-
-    if filename.endswith(".docx"):
-        return read_docx_as_text(uploaded_file)
-
-    if filename.endswith(".pdf"):
-        return read_pdf_as_text(uploaded_file)
-
-    if filename.endswith(".xlsx"):
-        return read_excel_as_text(uploaded_file)
-
-    if filename.endswith(".txt") or filename.endswith(".csv"):
-        uploaded_file.seek(0)
-        return uploaded_file.read().decode("utf-8", errors="ignore")
-
-    return ""
-
-
-# =========================================================
-# Dynamic PC extraction from rubric
-# =========================================================
 
 def extract_pc_list_from_rubric(rubric_text):
-    """
-    Extracts PCs from the rubric dynamically.
-
-    Supports:
-    3.1
-    PC3.1
-    PC 3.1
-    E3:PC3.1
-    E4:PC4.1
-    """
-
     pcs = []
 
     patterns = [
@@ -224,15 +69,11 @@ def extract_pc_list_from_rubric(rubric_text):
     for pattern in patterns:
         for match in re.finditer(pattern, rubric_text, flags=re.IGNORECASE):
             if len(match.groups()) == 2:
-                element = match.group(1)
                 pc_number = match.group(2)
-                pc_code = f"E{element}:PC{pc_number}"
             else:
                 pc_number = match.group(1)
-                element = pc_number.split(".")[0]
-                pc_code = f"E{element}:PC{pc_number}"
 
-            pc_code = normalize_any_pc(pc_code)
+            pc_code = f"PC{pc_number}"
 
             if pc_code not in pcs:
                 pcs.append(pc_code)
@@ -240,169 +81,128 @@ def extract_pc_list_from_rubric(rubric_text):
     return pcs
 
 
-def extract_sections_dynamic(text, pc_list):
-    """
-    Extracts sections based on PCs detected from the rubric.
-    """
+def extract_rubric_sections(rubric_text, pc_list):
+    sections = {}
 
     headings = []
 
-    for pc_code in pc_list:
-        pc_number = pc_code.split("PC")[-1]
-        element = pc_number.split(".")[0]
+    for pc in pc_list:
+        pc_num = pc.replace("PC", "")
 
         patterns = [
-            rf"E\s*{element}\s*:?\s*PC\s*{re.escape(pc_number)}",
-            rf"PC\s*{re.escape(pc_number)}",
-            rf"\b{re.escape(pc_number)}\b",
+            rf"\bPC\s*{re.escape(pc_num)}\b",
+            rf"\b{re.escape(pc_num)}\b",
         ]
 
         for pattern in patterns:
-            for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+            for match in re.finditer(pattern, rubric_text, flags=re.IGNORECASE):
                 headings.append({
-                    "pc": pc_code,
-                    "start": match.start(),
-                    "end": match.end(),
-                    "matched": match.group(0),
+                    "pc": pc,
+                    "start": match.start()
                 })
 
     headings = sorted(headings, key=lambda x: x["start"])
 
-    clean_headings = []
-
+    clean = []
     for h in headings:
-        if not clean_headings:
-            clean_headings.append(h)
+        if not clean:
+            clean.append(h)
         else:
-            last = clean_headings[-1]
-
-            # Remove duplicate detections close to each other
+            last = clean[-1]
             if h["pc"] == last["pc"] and abs(h["start"] - last["start"]) < 50:
                 continue
+            clean.append(h)
 
-            clean_headings.append(h)
-
-    sections = {}
-
-    for i, h in enumerate(clean_headings):
+    for i, h in enumerate(clean):
         start = h["start"]
-        end = clean_headings[i + 1]["start"] if i + 1 < len(clean_headings) else len(text)
+        end = clean[i + 1]["start"] if i + 1 < len(clean) else len(rubric_text)
+        sections[h["pc"]] = rubric_text[start:end].strip()
 
-        pc_code = h["pc"]
-        section_text = text[start:end].strip()
-
-        if pc_code not in sections:
-            sections[pc_code] = section_text
-        else:
-            sections[pc_code] += "\n\n" + section_text
-
-    for pc_code in pc_list:
-        sections.setdefault(pc_code, "")
+    for pc in pc_list:
+        sections.setdefault(pc, "")
 
     return sections
 
 
-# =========================================================
-# OCR scanned student exam
-# =========================================================
-
-def extract_text_from_scanned_pdf(uploaded_pdf):
-    uploaded_pdf.seek(0)
-    pdf_bytes = uploaded_pdf.read()
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-
-    full_text = ""
-
-    for page_number, page in enumerate(doc, start=1):
-        pix = page.get_pixmap(dpi=220)
-        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-        text = pytesseract.image_to_string(img)
-
-        full_text += f"\n\n--- PAGE {page_number} ---\n{text}"
-
-    return full_text
+def extract_rubric_level_text(rubric_section, level):
+    """
+    Simple fallback: send the whole PC rubric section to AI.
+    This avoids brittle parsing of rubric table columns.
+    """
+    return rubric_section
 
 
-# =========================================================
-# AI grading
-# =========================================================
+def find_student_columns(df):
+    name_col = None
+    id_col = None
 
-def safe_json_loads(raw_text):
-    raw_text = raw_text.strip()
+    for col in df.columns:
+        c = str(col).lower()
 
-    try:
-        return json.loads(raw_text)
-    except Exception:
-        pass
+        if "name" in c and name_col is None:
+            name_col = col
 
-    match = re.search(r"\{.*\}", raw_text, flags=re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group(0))
-        except Exception:
-            pass
+        if "id" in c and id_col is None:
+            id_col = col
 
-    return None
+    return name_col, id_col
 
 
-def grade_pc_with_ai(
-    pc_code,
-    answer_text,
-    answer_key_text,
-    pc_rubric_text,
-    max_retries=5,
-):
-    answer_text = answer_text[:4500]
-    answer_key_text = answer_key_text[:4500]
-    pc_rubric_text = pc_rubric_text[:4500]
+def get_pc_columns(df):
+    """
+    Finds PC mark columns dynamically.
+    Accepts:
+    PC3.1
+    3.1
+    E3:PC3.1
+    """
 
+    pc_cols = {}
+
+    for col in df.columns:
+        col_text = str(col).upper().replace(" ", "")
+
+        match = re.search(r"PC(\d+\.\d+)", col_text)
+        if match:
+            pc_cols[f"PC{match.group(1)}"] = col
+            continue
+
+        match = re.fullmatch(r"\d+\.\d+", col_text)
+        if match:
+            pc_cols[f"PC{match.group(0)}"] = col
+
+    return pc_cols
+
+
+def generate_ai_feedback(first_name, pc, mark, level, rubric_section, max_retries=4):
     prompt = f"""
-You are an assessor for MCT 122 Analyse Static Loads.
+You are writing formal assessment feedback for a diploma student.
 
-Assess the student's scanned answer using:
-1. The official answer key to judge technical correctness.
-2. The official rubric section to decide competency level and mark range.
+Student first name:
+{first_name}
 
 Performance Criterion:
-{pc_code}
+{pc}
 
-Official Answer Key Section:
-{answer_key_text}
+Student mark:
+{mark}
 
-Official Rubric Section:
-{pc_rubric_text}
+Competency level:
+{level}
 
-Student OCR Answer:
-{answer_text}
+Relevant rubric criteria:
+{rubric_section}
 
-Assessment task:
-1. Compare the student's answer with the official answer key.
-2. Check method, formula use, calculations, diagrams/FBDs, units, sign conventions, and final answer.
-3. Use the rubric section to decide the level.
-4. Assign a mark within the correct range.
-5. Write short formal feedback for the Assessor Feedback section.
+Write feedback for the Assessor Feedback section.
 
-Return ONLY valid JSON:
-{{
-  "pc": "{pc_code}",
-  "mark": 0,
-  "level": "Not Yet Competent",
-  "feedback": "..."
-}}
-
-Mark ranges:
-- Not Yet Competent: 0-59
-- Competent: 60-69
-- Competent with Merit: 70-84
-- Competent with Distinction: 85-100
-
-Important rules:
-- Do not invent missing calculations, diagrams, values, units, or solution steps.
-- If OCR is unclear or the answer section is missing, assign Not Yet Competent.
-- If the answer key section is missing, rely on the rubric and visible student work only.
-- The level must match the mark range.
-- Feedback must be 1 to 2 sentences.
-- Feedback must be specific and suitable for a formal assessment feedback form.
+Rules:
+- Use the student's first name once at the beginning.
+- Write 1 to 2 sentences only.
+- Match the feedback to the mark and competency level.
+- Explain what the student achieved and what should be improved.
+- Use clear academic language.
+- Do not mention AI, rubric file, or automated marking.
+- Do not include bullet points.
 """
 
     for attempt in range(max_retries):
@@ -410,378 +210,194 @@ Important rules:
             response = client.responses.create(
                 model="gpt-4.1-mini",
                 input=prompt,
-                max_output_tokens=300,
+                max_output_tokens=140
             )
 
-            raw = response.output_text.strip()
-            result = safe_json_loads(raw)
-
-            if result is None:
-                raise ValueError("AI response was not valid JSON.")
-
-            mark = int(result.get("mark", 0))
-            mark = max(0, min(100, mark))
-
-            result["pc"] = pc_code
-            result["mark"] = mark
-            result["level"] = grade_level(mark)
-
-            time.sleep(2)
-            return result
+            return response.output_text.strip()
 
         except RateLimitError:
-            wait_time = 10 * (attempt + 1)
-            st.warning(f"Rate limit reached for {pc_code}. Retrying in {wait_time} seconds...")
+            wait_time = 8 * (attempt + 1)
+            st.warning(f"Rate limit reached while generating feedback for {pc}. Retrying in {wait_time} seconds...")
             time.sleep(wait_time)
 
         except (APIError, APITimeoutError):
             wait_time = 5 * (attempt + 1)
-            st.warning(f"Temporary API issue for {pc_code}. Retrying in {wait_time} seconds...")
+            st.warning(f"Temporary API issue for {pc}. Retrying in {wait_time} seconds...")
             time.sleep(wait_time)
 
         except Exception:
-            return {
-                "pc": pc_code,
-                "mark": 0,
-                "level": "Not Yet Competent",
-                "feedback": "The answer could not be reliably graded because the extracted response or OCR text was unclear.",
-            }
+            break
 
-    return {
-        "pc": pc_code,
-        "mark": 0,
-        "level": "Not Yet Competent",
-        "feedback": "The answer could not be graded because the API rate limit was reached after several retries.",
-    }
+    return (
+        f"{first_name}, you achieved {level} for {pc}. "
+        f"Please review the relevant solution steps, accuracy, presentation, and final answer to improve your performance."
+    )
 
 
-# =========================================================
-# DOCX filling
-# =========================================================
-
-def fill_feedback_template(doc, student_name, student_id, pc_marks, feedback_rows):
+def fill_template(doc, student_name, student_id, feedback_rows):
     """
-    Fills:
-    - Student Name
-    - ID No.
-    - PC marks
-    - Summative grade
-    - Assessor feedback rows
-
-    feedback_rows:
-    {
-        "PC3.1": ("Competent", "Feedback..."),
-        "PC4.2": ("Competent with Merit", "Feedback...")
-    }
+    Fills name, ID, and adds feedback table under the template.
     """
 
     for table in doc.tables:
         for row in table.rows:
             cells = row.cells
-            row_text = [cell.text.strip() for cell in cells]
 
-            # Fill Student Name and ID No.
             for i, cell in enumerate(cells):
                 text = cell.text.strip()
 
                 if text in ["Student Name", "Student Name:"] and i + 1 < len(cells):
-                    cells[i + 1].text = student_name
+                    cells[i + 1].text = str(student_name)
 
-                if text in ["ID No.", "Student ID", "ID No", "Student ID:"] and i + 1 < len(cells):
-                    cells[i + 1].text = student_id
-
-            # Fill PC marks in Assessment Results table
-            for pc_code, mark in pc_marks.items():
-                pc_label = template_pc_label(pc_code)
-
-                if pc_code in row_text or pc_label in row_text:
-                    placed = False
-
-                    # Prefer empty cells in the row
-                    for cell in cells:
-                        if cell.text.strip() == "":
-                            cell.text = str(mark)
-                            placed = True
-                            break
-
-                    # Fallback: replace old 60 if template has default 60
-                    if not placed:
-                        for cell in cells:
-                            if cell.text.strip() == "60":
-                                cell.text = str(mark)
-                                break
-
-            # Fill summative grade
-            if "Summative Assessment Grade %:" in row_text:
-                marks = list(pc_marks.values())
-
-                if marks:
-                    if any(m < 60 for m in marks):
-                        summative = min(marks)
-                    else:
-                        summative = round(sum(marks) / len(marks))
-
-                    placed = False
-
-                    for cell in cells:
-                        if cell.text.strip() == "":
-                            cell.text = str(summative)
-                            placed = True
-                            break
-
-                    if not placed:
-                        for cell in cells:
-                            if cell.text.strip() == "60":
-                                cell.text = str(summative)
-                                break
-
-            # Fill feedback rows if template already has PC feedback rows
-            for pc_short, (level, feedback) in feedback_rows.items():
-                if pc_short in row_text:
-                    pc_index = row_text.index(pc_short)
-
-                    if pc_index + 2 < len(cells):
-                        cells[pc_index + 1].text = level
-                        cells[pc_index + 2].text = feedback
-
-    return doc
-
-
-def add_feedback_table_if_missing(doc, feedback_rows):
-    """
-    If the template has only 'Assessor Feedback:' but no PC rows,
-    this appends a feedback table after the document content.
-    """
-
-    has_feedback_rows = False
-
-    for table in doc.tables:
-        for row in table.rows:
-            row_text = [cell.text.strip() for cell in row.cells]
-            for pc_short in feedback_rows.keys():
-                if pc_short in row_text:
-                    has_feedback_rows = True
-
-    if has_feedback_rows:
-        return doc
+                if text in ["ID No.", "ID No", "Student ID", "Student ID:"] and i + 1 < len(cells):
+                    cells[i + 1].text = str(student_id)
 
     doc.add_paragraph("")
-    doc.add_paragraph("Assessor Feedback")
+    doc.add_paragraph("Assessor Feedback:")
 
-    table = doc.add_table(rows=1, cols=3)
+    table = doc.add_table(rows=1, cols=4)
     table.style = "Table Grid"
 
-    hdr = table.rows[0].cells
-    hdr[0].text = "PC"
-    hdr[1].text = "Level"
-    hdr[2].text = "Feedback"
+    header = table.rows[0].cells
+    header[0].text = "PC"
+    header[1].text = "Mark"
+    header[2].text = "Level"
+    header[3].text = "Feedback"
 
-    for pc_short, (level, feedback) in feedback_rows.items():
+    for row_data in feedback_rows:
         row = table.add_row().cells
-        row[0].text = pc_short
-        row[1].text = level
-        row[2].text = feedback
+        row[0].text = row_data["PC"]
+        row[1].text = str(row_data["Mark"])
+        row[2].text = row_data["Level"]
+        row[3].text = row_data["Feedback"]
 
     return doc
 
 
-# =========================================================
-# Upload interface
-# =========================================================
-
-classlist = st.file_uploader("Upload classlist Excel", type=["xlsx"])
-template = st.file_uploader("Upload feedback template DOCX", type=["docx"])
-rubric = st.file_uploader("Upload grading rubric", type=["docx", "pdf", "xlsx", "txt", "csv"])
-answer_key = st.file_uploader("Upload official answer key", type=["docx", "pdf", "xlsx", "txt", "csv"])
-
-pdfs = st.file_uploader(
-    "Upload scanned student exam PDFs",
-    type=["pdf"],
-    accept_multiple_files=True,
-)
+rubric_file = st.file_uploader("Upload rubric.docx", type=["docx"])
+classlist_file = st.file_uploader("Upload classlist.xlsx", type=["xlsx"])
+template_file = st.file_uploader("Upload Template_Feedback.docx", type=["docx"])
 
 
-# =========================================================
-# Main processing
-# =========================================================
-
-if st.button("Generate Feedback Files"):
-    if not classlist:
-        st.error("Please upload the classlist Excel file.")
+if st.button("Generate AI Feedback Files"):
+    if not rubric_file or not classlist_file or not template_file:
+        st.error("Please upload rubric, classlist, and feedback template.")
         st.stop()
 
-    if not template:
-        st.error("Please upload the feedback DOCX template.")
-        st.stop()
-
-    if not rubric:
-        st.error("Please upload the grading rubric.")
-        st.stop()
-
-    if not answer_key:
-        st.error("Please upload the official answer key.")
-        st.stop()
-
-    if not pdfs:
-        st.error("Please upload scanned student exam PDFs.")
-        st.stop()
-
-    df = pd.read_excel(classlist)
-
-    st.subheader("Classlist Preview")
-    st.dataframe(df.head())
-
-    rubric_text = read_uploaded_file_as_text(rubric)
-    answer_key_text = read_uploaded_file_as_text(answer_key)
-
-    if not rubric_text.strip():
-        st.error("The rubric file could not be read.")
-        st.stop()
-
-    if not answer_key_text.strip():
-        st.error("The answer key file could not be read.")
-        st.stop()
-
+    rubric_text = read_docx_text(rubric_file)
     pc_list = extract_pc_list_from_rubric(rubric_text)
+    rubric_sections = extract_rubric_sections(rubric_text, pc_list)
 
-    if not pc_list:
-        st.error("No PCs were detected from the rubric. Please check that the rubric includes PC codes such as PC3.1, 3.1, or E3:PC3.1.")
+    df = pd.read_excel(classlist_file)
+
+    name_col, id_col = find_student_columns(df)
+    pc_cols = get_pc_columns(df)
+
+    st.subheader("Detected Setup")
+    st.write("Name column:", name_col)
+    st.write("ID column:", id_col)
+    st.write("PCs from rubric:", pc_list)
+    st.write("PC mark columns from classlist:", pc_cols)
+
+    if not name_col or not id_col:
+        st.error("Could not detect student name or ID column.")
         st.stop()
 
-    st.subheader("PCs detected from rubric")
-    st.write(pc_list)
-
-    rubric_sections = extract_sections_dynamic(rubric_text, pc_list)
-    answer_key_sections = extract_sections_dynamic(answer_key_text, pc_list)
-
-    with st.expander("Preview extracted rubric sections"):
-        for pc_code, section in rubric_sections.items():
-            st.markdown(f"### {pc_code}")
-            st.text(section[:1500] if section else "No section detected.")
-
-    with st.expander("Preview extracted answer key sections"):
-        for pc_code, section in answer_key_sections.items():
-            st.markdown(f"### {pc_code}")
-            st.text(section[:1500] if section else "No section detected.")
+    if not pc_cols:
+        st.error("Could not detect PC mark columns. Use headers like PC3.1, 3.1, or E3:PC3.1.")
+        st.stop()
 
     zip_buffer = io.BytesIO()
-    report_rows = []
-
+    summary_rows = []
     progress = st.progress(0)
 
     with zipfile.ZipFile(zip_buffer, "w") as zip_file:
-        for index, pdf in enumerate(pdfs):
-            student_id = pdf.name.replace(".pdf", "").strip()
+        for index, student in df.iterrows():
+            student_name = student[name_col]
+            student_id = student[id_col]
+            first_name = get_first_name(student_name)
 
-            st.write(f"Processing: {student_id}")
+            feedback_rows = []
 
-            student_row = find_student_by_id(df, student_id)
+            for pc in pc_list:
+                if pc not in pc_cols:
+                    continue
 
-            if student_row is None:
-                st.warning(f"Student ID not found in classlist: {student_id}")
-                continue
+                mark = student[pc_cols[pc]]
 
-            student_name = guess_student_name(student_row)
+                if pd.isna(mark):
+                    continue
 
-            exam_text = extract_text_from_scanned_pdf(pdf)
-            pc_sections = extract_sections_dynamic(exam_text, pc_list)
+                mark = int(round(float(mark)))
+                level = get_level(mark)
+                rubric_section = rubric_sections.get(pc, "")
 
-            with st.expander(f"OCR and detected PC sections for {student_id}"):
-                st.markdown("### Detected PC sections from student scan")
-                detected = [pc for pc, txt in pc_sections.items() if txt.strip()]
-                st.write(detected)
-
-                st.markdown("### OCR preview")
-                st.text(exam_text[:3000])
-
-            pc_marks = {}
-            feedback_rows = {}
-
-            for pc_code in pc_list:
-                pc_label = template_pc_label(pc_code)
-
-                student_answer_text = pc_sections.get(pc_code, "")
-                pc_rubric_text = rubric_sections.get(pc_code, "")
-                pc_answer_key_text = answer_key_sections.get(pc_code, "")
-
-                if not student_answer_text.strip():
-                    result = {
-                        "pc": pc_code,
-                        "mark": 0,
-                        "level": "Not Yet Competent",
-                        "feedback": f"No clear answer section was detected for {pc_label}. The student should ensure the answer is clearly labelled and complete.",
-                    }
-                else:
-                    result = grade_pc_with_ai(
-                        pc_code=pc_code,
-                        answer_text=student_answer_text,
-                        answer_key_text=pc_answer_key_text,
-                        pc_rubric_text=pc_rubric_text,
-                    )
-
-                pc_marks[pc_code] = result["mark"]
-                feedback_rows[pc_label] = (
-                    result["level"],
-                    result["feedback"],
+                feedback = generate_ai_feedback(
+                    first_name=first_name,
+                    pc=pc,
+                    mark=mark,
+                    level=level,
+                    rubric_section=rubric_section
                 )
 
-                report_rows.append({
-                    "Student ID": student_id,
-                    "Student Name": student_name,
-                    "PC": pc_code,
-                    "Template PC Label": pc_label,
-                    "Mark": result["mark"],
-                    "Level": result["level"],
-                    "Feedback": result["feedback"],
-                    "Student Answer Detected": bool(student_answer_text.strip()),
-                    "Rubric Section Detected": bool(pc_rubric_text.strip()),
-                    "Answer Key Section Detected": bool(pc_answer_key_text.strip()),
+                feedback_rows.append({
+                    "PC": pc,
+                    "Mark": mark,
+                    "Level": level,
+                    "Feedback": feedback
                 })
 
-            template.seek(0)
-            doc = Document(template)
+                summary_rows.append({
+                    "Student Name": student_name,
+                    "Student ID": student_id,
+                    "PC": pc,
+                    "Mark": mark,
+                    "Level": level,
+                    "Feedback": feedback
+                })
 
-            doc = fill_feedback_template(
+            template_file.seek(0)
+            doc = Document(template_file)
+
+            doc = fill_template(
                 doc=doc,
                 student_name=student_name,
                 student_id=student_id,
-                pc_marks=pc_marks,
-                feedback_rows=feedback_rows,
+                feedback_rows=feedback_rows
             )
-
-            doc = add_feedback_table_if_missing(doc, feedback_rows)
 
             doc_buffer = io.BytesIO()
             doc.save(doc_buffer)
             doc_buffer.seek(0)
 
-            zip_file.writestr(f"{student_id}.docx", doc_buffer.getvalue())
+            output_name = f"{student_id}.docx"
+            zip_file.writestr(output_name, doc_buffer.getvalue())
 
-            progress.progress((index + 1) / len(pdfs))
+            progress.progress((index + 1) / len(df))
 
     zip_buffer.seek(0)
 
-    st.success("Feedback files generated successfully.")
+    st.success("AI feedback files generated successfully.")
 
     st.download_button(
-        label="Download Feedback DOCX ZIP",
+        label="Download Feedback ZIP",
         data=zip_buffer.getvalue(),
-        file_name="feedback_files.zip",
-        mime="application/zip",
+        file_name="student_ai_feedback_files.zip",
+        mime="application/zip"
     )
 
-    if report_rows:
-        st.subheader("Generated Marks and Feedback Summary")
+    if summary_rows:
+        summary_df = pd.DataFrame(summary_rows)
 
-        report_df = pd.DataFrame(report_rows)
-        st.dataframe(report_df)
+        st.subheader("Feedback Summary")
+        st.dataframe(summary_df)
 
         csv_buffer = io.StringIO()
-        report_df.to_csv(csv_buffer, index=False)
+        summary_df.to_csv(csv_buffer, index=False)
 
         st.download_button(
             label="Download Feedback Summary CSV",
             data=csv_buffer.getvalue(),
             file_name="feedback_summary.csv",
-            mime="text/csv",
+            mime="text/csv"
         )
