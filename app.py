@@ -32,7 +32,67 @@ sa2_date = st.text_input(
     placeholder="Example: 15/06/2026"
 )
 
+signature_file = st.file_uploader(
+    "Upload Assessor Signature Image",
+    type=["png", "jpg", "jpeg"]
+)
+
+signature_date = st.text_input(
+    "Signature Date",
+    placeholder="Example: 20/05/2026"
+)
+
+signature_bytes = None
+
+if signature_file is not None:
+    signature_file.seek(0)
+    signature_bytes = signature_file.read()
+
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+
+def insert_signature_image(cell, signature_bytes, width_inches=1.2):
+    if not signature_bytes:
+        return
+
+    cell.text = ""
+
+    paragraph = cell.paragraphs[0]
+    run = paragraph.add_run()
+    run.add_picture(io.BytesIO(signature_bytes), width=Inches(width_inches))
+    
+
+def fill_signature_fields(table, signature_bytes, signature_date):
+    for row_index, row in enumerate(table.rows):
+        cells = row.cells
+
+        for i, cell in enumerate(cells):
+            text = cell.text.strip().lower()
+
+            # First location: Assessor Signature:
+            if "assessor signature" in text:
+                if i + 1 < len(cells):
+                    insert_signature_image(cells[i + 1], signature_bytes)
+
+                # Date in following row
+                if row_index + 1 < len(table.rows):
+                    next_row = table.rows[row_index + 1]
+
+                    for j, next_cell in enumerate(next_row.cells):
+                        if "date" in next_cell.text.strip().lower():
+                            if j + 1 < len(next_row.cells):
+                                next_row.cells[j + 1].text = signature_date
+
+            # Second location: Signature:
+            elif text in ["signature:", "signature"]:
+                if i + 1 < len(cells):
+                    insert_signature_image(cells[i + 1], signature_bytes)
+
+                # Date in adjacent cell
+                for j, date_cell in enumerate(cells):
+                    if "date" in date_cell.text.strip().lower():
+                        if j + 1 < len(cells):
+                            cells[j + 1].text = signature_date
+
 
 def extract_lo_sections_from_rubric(rubric_text):
     """
@@ -865,7 +925,16 @@ def insert_feedback_table_at_assessor_feedback(
     return doc
 
 
-def fill_template(doc, student_name, student_id, assessor_name, feedback_rows, lo_data, sa2_date):
+def fill_template(
+    doc,
+    student_name,
+    student_id,
+    assessor_name,
+    signature_bytes,
+    signature_date,
+    feedback_rows,
+    lo_data,
+    sa2_date):
     pc_marks = {
         normalize_pc_for_matching(row["PC"]): row["Mark"]
         for row in feedback_rows
@@ -915,6 +984,8 @@ def fill_template(doc, student_name, student_id, assessor_name, feedback_rows, l
         lo_data=lo_data
     )
 
+    fill_signature_fields(table, signature_bytes, signature_date)
+        
     return doc
 
 
@@ -1016,15 +1087,16 @@ if st.button("Generate AI Feedback Files"):
             template_file.seek(0)
             doc = Document(template_file)
 
-            doc = fill_template(
-                doc=doc,
-                student_name=student_name,
-                student_id=student_id,
-                assessor_name=assessor_name,
-                feedback_rows=feedback_rows,
-                lo_data=lo_data,
-                sa2_date=sa2_date
-            )
+            doc = fill_template(doc=doc,
+                                student_name=student_name,
+                                student_id=student_id,
+                                assessor_name=assessor_name,
+                                signature_bytes=signature_bytes,
+                                signature_date=signature_date,
+                                feedback_rows=feedback_rows,
+                                lo_data=lo_data,
+                                sa2_date=sa2_date
+                            )
 
             doc_buffer = io.BytesIO()
             doc.save(doc_buffer)
