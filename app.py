@@ -445,7 +445,80 @@ def fill_first_empty_cell_in_row(row, value, start_index=0):
 
     return False
 
+def insert_image_adjacent_or_empty(
+    row,
+    label_keywords,
+    image_bytes,
+    width_inches=1.1
+):
+    """
+    Robust image insertion for merged Word tables.
+    """
 
+    if not image_bytes:
+        return False
+
+    cells = row.cells
+
+    for i, cell in enumerate(cells):
+
+        text = cell.text.strip()
+
+        if any(
+            keyword.lower() in text.lower()
+            for keyword in label_keywords
+        ):
+
+            # -------------------------------------------------
+            # 1. Try immediate right cell
+            # -------------------------------------------------
+
+            if i + 1 < len(cells):
+
+                target = cells[i + 1]
+
+                if is_empty_cell(target):
+                    insert_image_in_cell(
+                        target,
+                        image_bytes,
+                        width_inches
+                    )
+                    return True
+
+            # -------------------------------------------------
+            # 2. Try first empty cell after label
+            # -------------------------------------------------
+
+            for j in range(i + 1, len(cells)):
+
+                if is_empty_cell(cells[j]):
+
+                    insert_image_in_cell(
+                        cells[j],
+                        image_bytes,
+                        width_inches
+                    )
+
+                    return True
+
+            # -------------------------------------------------
+            # 3. Try any empty cell in row
+            # -------------------------------------------------
+
+            for j in range(len(cells)):
+
+                if is_empty_cell(cells[j]):
+
+                    insert_image_in_cell(
+                        cells[j],
+                        image_bytes,
+                        width_inches
+                    )
+
+                    return True
+
+    return False
+    
 def fill_adjacent_or_empty(row, label_keywords, value):
     cells = row.cells
 
@@ -517,7 +590,11 @@ def fill_signature_fields(table, signature_bytes, signature_date):
                             break
                     else:
                         if i + 1 < len(cells):
-                            insert_signature_image(cells[i + 1], signature_bytes)
+                            insert_image_adjacent_or_empty(
+                                                        row=row,
+                                                        label_keywords=["Assessor Signature"],
+                                                        image_bytes=signature_bytes
+                                                    )
 
                 if signature_date and row_index + 1 < len(table.rows):
                     next_row = table.rows[row_index + 1]
@@ -527,7 +604,11 @@ def fill_signature_fields(table, signature_bytes, signature_date):
             elif not second_signature_done and text in ["signature:", "signature"]:
 
                 if signature_bytes and i + 1 < len(cells):
-                    insert_signature_image(cells[i + 1], signature_bytes)
+                    insert_image_adjacent_or_empty(
+                                                    row=row,
+                                                    label_keywords=["Assessor Signature"],
+                                                    image_bytes=signature_bytes
+                                                )
 
                 if signature_date:
                     for j, date_cell in enumerate(cells):
@@ -555,7 +636,11 @@ def fill_student_signature_fields(table, student_signature_bytes, signature_date
             # First place: adjacent to Signature:
             if not signature_done and text in ["signature:", "signature"]:
                 if student_signature_bytes and i + 1 < len(cells):
-                    insert_image_in_cell(cells[i + 1], student_signature_bytes)
+                    insert_image_adjacent_or_empty(
+                                                    row=row,
+                                                    label_keywords=["Signature"],
+                                                    image_bytes=student_signature_bytes
+                                                )
 
                 if signature_date:
                     for j, date_cell in enumerate(cells):
@@ -571,11 +656,19 @@ def fill_student_signature_fields(table, student_signature_bytes, signature_date
                 if student_signature_bytes:
                     for j in range(i + 1, len(cells)):
                         if is_empty_cell(cells[j]):
-                            insert_image_in_cell(cells[j], student_signature_bytes)
+                            insert_image_adjacent_or_empty(
+                                                            row=row,
+                                                            label_keywords=["Student Signature"],
+                                                            image_bytes=student_signature_bytes
+                                                        )
                             break
                     else:
                         if i + 1 < len(cells):
-                            insert_image_in_cell(cells[i + 1], student_signature_bytes)
+                            insert_image_adjacent_or_empty(
+                                                            row=row,
+                                                            label_keywords=["Student Signature"],
+                                                            image_bytes=student_signature_bytes
+                                                        )
 
                 if signature_date and row_index + 1 < len(table.rows):
                     next_row = table.rows[row_index + 1]
@@ -925,8 +1018,6 @@ def fill_template(
 
         if is_ack_table:
             fill_name_and_id_in_table(table, student_name, student_id)
-            fill_assessor_name_in_table(table, assessor_name)
-            fill_signature_fields(table, signature_bytes, signature_date)
             fill_student_signature_fields(table, student_signature_bytes, signature_date)
             continue
 
@@ -977,8 +1068,7 @@ if st.button("Generate AI Feedback Files"):
 
     st.subheader("Detected Student Signatures")
     st.write("Total detected signatures:", len(student_signatures))
-    for sid in student_signatures.keys():
-        st.write("Detected signature for ID:", sid)
+
 
     rubric_text = read_docx_text(rubric_file)
     pc_list = extract_pc_list_from_rubric(rubric_text)
@@ -1069,16 +1159,6 @@ if st.button("Generate AI Feedback Files"):
 
             student_signature_bytes = student_signatures.get(str(student_id).strip())
 
-            # Students signature listing
-            student_id_key = str(student_id).strip()
-            if student_id_key.endswith(".0"):
-                student_id_key = student_id_key[:-2]    
-            student_signature_bytes = student_signatures.get(student_id_key)
-            st.write(
-                f"Student: {student_name} | "
-                f"ID: {student_id_key} | "
-                f"Signature found: {student_signature_bytes is not None}"
-            )
 
             doc = fill_template(
                 doc=doc,
