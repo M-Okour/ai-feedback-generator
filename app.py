@@ -647,11 +647,13 @@ def fill_student_signature_fields(table, student_signature_bytes, signature_date
                     insert_image_in_cell(cells[i + 1], student_signature_bytes)
                     break
 
-                if signature_date:
-                    for j, date_cell in enumerate(cells):
-                        if "date" in date_cell.text.strip().lower():
-                            if j + 1 < len(cells):
-                                cells[j + 1].text = signature_date
+                if signature_date and row_index + 1 < len(table.rows):
+                    next_row = table.rows[row_index + 1]
+                    fill_adjacent_or_empty(
+                        row=next_row,
+                        label_keywords=["Date"],
+                        value=signature_date
+                    )
                         
 
                 signature_done = True
