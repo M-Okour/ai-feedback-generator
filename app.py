@@ -645,7 +645,7 @@ def fill_student_signature_fields(table, student_signature_bytes, signature_date
             if not signature_done and text in ["Student Signature:", "Student signature:"]:
                 if student_signature_bytes and i + 1 < len(cells):
                     insert_image_in_cell(cells[i + 1], student_signature_bytes)
-                    break
+                    
 
                 if signature_date and row_index + 1 < len(table.rows):
                     next_row = table.rows[row_index + 1]
@@ -653,8 +653,7 @@ def fill_student_signature_fields(table, student_signature_bytes, signature_date
                         row=next_row,
                         label_keywords=["Date"],
                         value=signature_date
-                    )
-                        
+                    )   
 
                 signature_done = True
 
