@@ -149,7 +149,7 @@ def extract_student_signatures_from_excel(classlist_bytes):
         if "id" in header.lower():
             student_id_col = cell.column
 
-        if "Student Signature" in header_norm:
+        if "student_signature" in header_norm or "studentsignature" in header_norm:
             signature_col = cell.column
 
     if student_id_col is None or signature_col is None:
