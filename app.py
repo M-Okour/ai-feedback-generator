@@ -975,6 +975,11 @@ if st.button("Generate AI Feedback Files"):
     classlist_bytes = classlist_file.getvalue()
     student_signatures = extract_student_signatures_from_excel(classlist_bytes)
 
+    st.subheader("Detected Student Signatures")
+    st.write("Total detected signatures:", len(student_signatures))
+    for sid in student_signatures.keys():
+        st.write("Detected signature for ID:", sid)
+
     rubric_text = read_docx_text(rubric_file)
     pc_list = extract_pc_list_from_rubric(rubric_text)
     rubric_sections = extract_rubric_sections(rubric_text, pc_list)
@@ -984,10 +989,11 @@ if st.button("Generate AI Feedback Files"):
 
     name_col, id_col = find_student_columns(df)
     pc_cols = get_pc_columns(df)
-
+    
     st.subheader("Detected Setup")
     st.write("Name column:", name_col)
     st.write("ID column:", id_col)
+        
     st.write("PCs from rubric:", pc_list)
     st.write("PC mark columns from classlist:", pc_cols)
     st.write("LO/Element mapping:", lo_data)
@@ -1062,6 +1068,17 @@ if st.button("Generate AI Feedback Files"):
             doc = Document(template_file)
 
             student_signature_bytes = student_signatures.get(str(student_id).strip())
+
+            # Students signature listing
+            student_id_key = str(student_id).strip()
+            if student_id_key.endswith(".0"):
+                student_id_key = student_id_key[:-2]    
+            student_signature_bytes = student_signatures.get(student_id_key)
+            st.write(
+                f"Student: {student_name} | "
+                f"ID: {student_id_key} | "
+                f"Signature found: {student_signature_bytes is not None}"
+            )
 
             doc = fill_template(
                 doc=doc,
