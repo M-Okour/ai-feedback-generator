@@ -60,7 +60,6 @@ def extract_student_signatures_from_excel(classlist_file):
     }
     """
 
-    classlist_file.seek(0)
     wb = load_workbook(classlist_file)
     ws = wb.active
 
@@ -1134,6 +1133,7 @@ def fill_template(doc,
 rubric_file = st.file_uploader("Upload rubric.docx", type=["docx"])
 classlist_file = st.file_uploader("Upload classlist.xlsx", type=["xlsx"])
 template_file = st.file_uploader("Upload Template_Feedback.docx", type=["docx"])
+classlist_file.seek(0)
 student_signatures = extract_student_signatures_from_excel(classlist_file)
 
 if st.button("Generate AI Feedback Files"):
