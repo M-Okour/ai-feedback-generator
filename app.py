@@ -7,6 +7,7 @@ import streamlit as st
 
 from docx.shared import Pt
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
+from openpyxl import load_workbook
 
 from docx import Document
 from docx.shared import Inches
@@ -50,6 +51,115 @@ if signature_file is not None:
 
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
+def extract_student_signatures_from_excel(classlist_file):
+    """
+    Extracts embedded signature images from the Excel column named Student_Signature.
+    Returns:
+    {
+        "H00123456": image_bytes
+    }
+    """
+
+    classlist_file.seek(0)
+    wb = load_workbook(classlist_file)
+    ws = wb.active
+
+    header_row = 1
+    student_id_col = None
+    signature_col = None
+
+    for cell in ws[header_row]:
+        header = str(cell.value).strip() if cell.value else ""
+
+        if "id" in header.lower():
+            student_id_col = cell.column
+
+        if header == "Student_Signature":
+            signature_col = cell.column
+
+    if student_id_col is None or signature_col is None:
+        return {}
+
+    signatures = {}
+
+    for image in ws._images:
+        anchor = image.anchor._from
+        image_col = anchor.col + 1
+        image_row = anchor.row + 1
+
+        if image_col == signature_col:
+            student_id = ws.cell(row=image_row, column=student_id_col).value
+
+            if student_id:
+                student_id = str(student_id).strip()
+                signatures[student_id] = image._data()
+
+    return signatures
+
+def insert_image_in_cell(cell, image_bytes, width_inches=1.1):
+    if not image_bytes:
+        return
+
+    cell.text = ""
+    run = cell.paragraphs[0].add_run()
+    run.add_picture(io.BytesIO(image_bytes), width=Inches(width_inches))
+
+def fill_student_signature_fields(table, student_signature_bytes, signature_date):
+    if not student_signature_bytes and not signature_date:
+        return
+
+    signature_done = False
+    student_signature_done = False
+
+    for row_index, row in enumerate(table.rows):
+        cells = row.cells
+
+        for i, cell in enumerate(cells):
+            text = cell.text.strip().lower()
+
+            # First place: adjacent to "Signature:"
+            if (
+                not signature_done
+                and text in ["signature:", "signature"]
+            ):
+                if student_signature_bytes and i + 1 < len(cells):
+                    insert_image_in_cell(cells[i + 1], student_signature_bytes)
+
+                if signature_date:
+                    for j, date_cell in enumerate(cells):
+                        if "date" in date_cell.text.strip().lower():
+                            if j + 1 < len(cells):
+                                cells[j + 1].text = signature_date
+                            break
+
+                signature_done = True
+
+            # Second place: adjacent to "Student Signature:"
+            if "student signature" in text and not student_signature_done:
+                if student_signature_bytes:
+                    fill_adjacent_or_empty(
+                        row=row,
+                        label_keywords=["Student Signature"],
+                        value=""
+                    )
+
+                    for j in range(i + 1, len(cells)):
+                        if is_empty_cell(cells[j]):
+                            insert_image_in_cell(cells[j], student_signature_bytes)
+                            break
+
+                # following row date
+                if signature_date and row_index + 1 < len(table.rows):
+                    n
+                    
+                    ext_row = table.rows[row_index + 1]
+                    fill_adjacent_or_empty(
+                        row=next_row,
+                        label_keywords=["Date"],
+                        value=signature_date
+                    )
+
+                student_signature_done = True
 def insert_signature_image(cell, signature_bytes, width_inches=1.2):
     if not signature_bytes:
         return
@@ -952,16 +1062,16 @@ def insert_feedback_table_at_assessor_feedback(
     return doc
 
 
-def fill_template(
-    doc,
-    student_name,
-    student_id,
-    assessor_name,
-    signature_bytes,
-    signature_date,
-    feedback_rows,
-    lo_data,
-    sa2_date):
+def fill_template(doc,
+                student_name,
+                student_id,
+                assessor_name,
+                signature_bytes,
+                student_signature_bytes,
+                signature_date,
+                feedback_rows,
+                lo_data,
+                sa2_date):
     pc_marks = {
         normalize_pc_for_matching(row["PC"]): row["Mark"]
         for row in feedback_rows
@@ -990,6 +1100,8 @@ def fill_template(
         if is_ack_table:
             fill_name_and_id_in_table(table, student_name, student_id)
             fill_assessor_name_in_table(table, assessor_name)
+            fill_signature_fields(table, signature_bytes, signature_date)
+            fill_student_signature_fields(table, student_signature_bytes, signature_date)
             continue
 
         if is_assessment_table:
@@ -997,9 +1109,12 @@ def fill_template(
             fill_marks_in_assessment_table(table, pc_marks)
             fill_summative_grade_in_table(table, pc_marks)
             fill_assessor_name_in_table(table, assessor_name)
+            fill_signature_fields(table, signature_bytes, signature_date)
+            fill_student_signature_fields(table, student_signature_bytes, signature_date)
 
     overall_level = get_overall_level_from_marks(pc_marks)
     sa_number = extract_sa_number_from_doc(doc)
+                    
     
     doc = insert_feedback_table_at_assessor_feedback(
         doc=doc,
@@ -1019,7 +1134,7 @@ def fill_template(
 rubric_file = st.file_uploader("Upload rubric.docx", type=["docx"])
 classlist_file = st.file_uploader("Upload classlist.xlsx", type=["xlsx"])
 template_file = st.file_uploader("Upload Template_Feedback.docx", type=["docx"])
-
+student_signatures = extract_student_signatures_from_excel(classlist_file)
 
 if st.button("Generate AI Feedback Files"):
     if not rubric_file or not classlist_file or not template_file:
@@ -1112,18 +1227,21 @@ if st.button("Generate AI Feedback Files"):
                 })
 
             template_file.seek(0)
+            
+            student_signature_bytes = student_signatures.get(str(student_id).strip())
+            
             doc = Document(template_file)
-
+            
             doc = fill_template(doc=doc,
-                                student_name=student_name,
-                                student_id=student_id,
-                                assessor_name=assessor_name,
-                                signature_bytes=signature_bytes,
-                                signature_date=signature_date,
-                                feedback_rows=feedback_rows,
-                                lo_data=lo_data,
-                                sa2_date=sa2_date
-                            )
+                            student_name=student_name,
+                            student_id=student_id,
+                            assessor_name=assessor_name,
+                            signature_bytes=signature_bytes,
+                            student_signature_bytes=student_signature_bytes,
+                            signature_date=signature_date,
+                            feedback_rows=feedback_rows,
+                            lo_data=lo_data,
+                            sa2_date=sa2_date)
 
             doc_buffer = io.BytesIO()
             doc.save(doc_buffer)
