@@ -567,7 +567,7 @@ def fill_student_signature_fields(table, student_signature_bytes, signature_date
                 signature_done = True
 
             # Second place: adjacent to Student Signature:
-            if "student signature" in text and not student_signature_done:
+            if "Student Signature:" in text and not student_signature_done:
                 if student_signature_bytes:
                     for j in range(i + 1, len(cells)):
                         if is_empty_cell(cells[j]):
