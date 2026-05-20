@@ -76,32 +76,33 @@ def fill_signature_fields(table, signature_bytes, signature_date):
             # -------------------------------------------------
             # First location:
             # Assessor Signature:
+            # Uses fill_adjacent_or_empty
             # -------------------------------------------------
 
             if "assessor signature" in text:
 
-                if signature_bytes and i + 1 < len(cells):
-                    insert_signature_image(
-                        cells[i + 1],
-                        signature_bytes
-                    )
-
-                # Date in following row
-                if signature_date and row_index + 1 < len(table.rows):
-
-                    next_row = table.rows[row_index + 1]
-
-                    for j, next_cell in enumerate(next_row.cells):
-
-                        if "date" in next_cell.text.strip().lower():
-
-                            if j + 1 < len(next_row.cells):
-                                next_row.cells[j + 1].text = signature_date
-
+                if signature_bytes:
+                    # find target cell using adjacent/empty logic
+                    for target_i in range(i + 1, len(cells)):
+                        if is_empty_cell(cells[target_i]):
+                            insert_signature_image(
+                                cells[target_i],
+                                signature_bytes
+                            )
                             break
 
+                # Date in following row using fill_adjacent_or_empty
+                if signature_date and row_index + 1 < len(table.rows):
+                    next_row = table.rows[row_index + 1]
+
+                    fill_adjacent_or_empty(
+                        row=next_row,
+                        label_keywords=["Date", "Date:"],
+                        value=signature_date
+                    )
+
             # -------------------------------------------------
-            # Second location ONLY ONCE
+            # Second location ONLY ONCE:
             # Signature:
             # -------------------------------------------------
 
@@ -116,17 +117,12 @@ def fill_signature_fields(table, signature_bytes, signature_date):
                         signature_bytes
                     )
 
-                # Date in same row
                 if signature_date:
-
-                    for j, date_cell in enumerate(cells):
-
-                        if "date" in date_cell.text.strip().lower():
-
-                            if j + 1 < len(cells):
-                                cells[j + 1].text = signature_date
-
-                            break
+                    fill_adjacent_or_empty(
+                        row=row,
+                        label_keywords=["Date", "Date:"],
+                        value=signature_date
+                    )
 
                 second_signature_done = True
 
