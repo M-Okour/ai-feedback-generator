@@ -149,7 +149,7 @@ def extract_student_signatures_from_excel(classlist_bytes):
         if "id" in header.lower():
             student_id_col = cell.column
 
-        if "student_signature" in header_norm:
+        if "Student Signature" in header_norm:
             signature_col = cell.column
 
     if student_id_col is None or signature_col is None:
@@ -832,7 +832,7 @@ def insert_feedback_at_assessor_feedback(doc, feedback_rows, student_name, overa
 
             for i, cell in enumerate(cells):
                 if "Assessor Feedback:" in cell.text or "Assessor Feedback" in cell.text:
-                    target_row_index = row._tr.getparent().index(row._tr) + 1
+                    target_row_index = row._tr.getparent().index(row._tr)
 
                     if target_row_index < len(table.rows):
                         next_row = table.rows[target_row_index]
