@@ -16,7 +16,6 @@ from docx.oxml.ns import qn
 
 from openai import OpenAI, RateLimitError, APIError, APITimeoutError
 
-
 st.set_page_config(page_title="AI Feedback Generator", layout="wide")
 st.title("AI Student Feedback Generator from Marks and Rubric")
 assessor_name = st.text_input("Assessor Name")
@@ -51,16 +50,8 @@ if signature_file is not None:
 
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-def extract_student_signatures_from_excel(classlist_file):
-    """
-    Extracts embedded signature images from the Excel column named Student_Signature.
-    Returns:
-    {
-        "H00123456": image_bytes
-    }
-    """
-
-    wb = load_workbook(classlist_file)
+def extract_student_signatures_from_excel(classlist_bytes):
+    wb = load_workbook(io.BytesIO(classlist_bytes))
     ws = wb.active
 
     header_row = 1
@@ -73,7 +64,7 @@ def extract_student_signatures_from_excel(classlist_file):
         if "id" in header.lower():
             student_id_col = cell.column
 
-        if header == "Student_Signature":
+        if header.strip().lower() == "student signature":
             signature_col = cell.column
 
     if student_id_col is None or signature_col is None:
@@ -1133,8 +1124,10 @@ def fill_template(doc,
 rubric_file = st.file_uploader("Upload rubric.docx", type=["docx"])
 classlist_file = st.file_uploader("Upload classlist.xlsx", type=["xlsx"])
 template_file = st.file_uploader("Upload Template_Feedback.docx", type=["docx"])
-classlist_file.seek(0)
 student_signatures = extract_student_signatures_from_excel(classlist_file)
+
+
+classlist_bytes = classlist_file.getvalue()
 
 if st.button("Generate AI Feedback Files"):
     if not rubric_file or not classlist_file or not template_file:
@@ -1149,7 +1142,7 @@ if st.button("Generate AI Feedback Files"):
     
     st.write("LO/Element mapping:", lo_data)
     
-    df = pd.read_excel(classlist_file)
+    df = pd.read_excel(io.BytesIO(classlist_bytes))
     
     name_col, id_col = find_student_columns(df)
     pc_cols = get_pc_columns(df)
