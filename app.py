@@ -580,35 +580,43 @@ def fill_signature_fields(table, signature_bytes, signature_date):
         for i, cell in enumerate(cells):
             text = cell.text.strip().lower()
 
-            # First location: Assessor Signature:
+            # -------------------------------------------------
+            # First location:
+            # Assessor Signature:
+            # Use fill_adjacent_or_empty for date/text fields
+            # -------------------------------------------------
             if "assessor signature" in text:
 
                 if signature_bytes:
+                    # Put signature image in adjacent/empty cell
                     for j in range(i + 1, len(cells)):
                         if is_empty_cell(cells[j]):
                             insert_signature_image(cells[j], signature_bytes)
                             break
                     else:
                         if i + 1 < len(cells):
-                            insert_image_adjacent_or_empty(
-                                                        row=row,
-                                                        label_keywords=["Assessor Signature"],
-                                                        image_bytes=signature_bytes
-                                                    )
+                            insert_signature_image(cells[i + 1], signature_bytes)
 
                 if signature_date and row_index + 1 < len(table.rows):
                     next_row = table.rows[row_index + 1]
-                    fill_adjacent_or_empty(next_row, ["Date"], signature_date)
 
-            # Second location: Signature: only once
-            elif not second_signature_done and text in ["signature:", "signature"]:
+                    fill_adjacent_or_empty(
+                        row=next_row,
+                        label_keywords=["Date"],
+                        value=signature_date
+                    )
+
+            # -------------------------------------------------
+            # Second location ONLY ONCE:
+            # Keep original logic for Signature: and Date
+            # -------------------------------------------------
+            elif (
+                not second_signature_done
+                and text in ["signature:", "signature"]
+            ):
 
                 if signature_bytes and i + 1 < len(cells):
-                    insert_image_adjacent_or_empty(
-                                                    row=row,
-                                                    label_keywords=["Assessor Signature"],
-                                                    image_bytes=signature_bytes
-                                                )
+                    insert_signature_image(cells[i + 1], signature_bytes)
 
                 if signature_date:
                     for j, date_cell in enumerate(cells):
@@ -636,11 +644,7 @@ def fill_student_signature_fields(table, student_signature_bytes, signature_date
             # First place: adjacent to Signature:
             if not signature_done and text in ["signature:", "signature"]:
                 if student_signature_bytes and i + 1 < len(cells):
-                    insert_image_adjacent_or_empty(
-                                                    row=row,
-                                                    label_keywords=["Signature"],
-                                                    image_bytes=student_signature_bytes
-                                                )
+                    insert_image_in_cell(cells[i + 1], student_signature_bytes)
 
                 if signature_date:
                     for j, date_cell in enumerate(cells):
@@ -652,23 +656,15 @@ def fill_student_signature_fields(table, student_signature_bytes, signature_date
                 signature_done = True
 
             # Second place: adjacent to Student Signature:
-            if "Student Signature:" in text and not student_signature_done:
+            if "student signature" in text and not student_signature_done:
                 if student_signature_bytes:
                     for j in range(i + 1, len(cells)):
                         if is_empty_cell(cells[j]):
-                            insert_image_adjacent_or_empty(
-                                                            row=row,
-                                                            label_keywords=["Student Signature"],
-                                                            image_bytes=student_signature_bytes
-                                                        )
+                            insert_image_in_cell(cells[j], student_signature_bytes)
                             break
                     else:
                         if i + 1 < len(cells):
-                            insert_image_adjacent_or_empty(
-                                                            row=row,
-                                                            label_keywords=["Student Signature"],
-                                                            image_bytes=student_signature_bytes
-                                                        )
+                            insert_image_in_cell(cells[i + 1], student_signature_bytes)
 
                 if signature_date and row_index + 1 < len(table.rows):
                     next_row = table.rows[row_index + 1]
