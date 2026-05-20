@@ -665,6 +665,7 @@ def fill_student_signature_fields(table, student_signature_bytes, signature_date
                     else:
                         if i + 1 < len(cells):
                             insert_image_in_cell(cells[i + 1], student_signature_bytes)
+                            break
 
                 if signature_date and row_index + 1 < len(table.rows):
                     next_row = table.rows[row_index + 1]
