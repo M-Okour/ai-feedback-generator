@@ -92,6 +92,7 @@ def fill_signature_fields(table, signature_bytes, signature_date):
                     if "date" in date_cell.text.strip().lower():
                         if j + 1 < len(cells):
                             cells[j + 1].text = signature_date
+                        break
 
 
 def extract_lo_sections_from_rubric(rubric_text):
