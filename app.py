@@ -62,37 +62,73 @@ def insert_signature_image(cell, signature_bytes, width_inches=1.2):
     
 
 def fill_signature_fields(table, signature_bytes, signature_date):
+    if not signature_bytes and not signature_date:
+        return
+
+    second_signature_done = False
+
     for row_index, row in enumerate(table.rows):
         cells = row.cells
 
         for i, cell in enumerate(cells):
             text = cell.text.strip().lower()
 
-            # First location: Assessor Signature:
+            # -------------------------------------------------
+            # First location:
+            # Assessor Signature:
+            # -------------------------------------------------
+
             if "assessor signature" in text:
-                if i + 1 < len(cells):
-                    insert_signature_image(cells[i + 1], signature_bytes)
+
+                if signature_bytes and i + 1 < len(cells):
+                    insert_signature_image(
+                        cells[i + 1],
+                        signature_bytes
+                    )
 
                 # Date in following row
-                if row_index + 1 < len(table.rows):
+                if signature_date and row_index + 1 < len(table.rows):
+
                     next_row = table.rows[row_index + 1]
 
                     for j, next_cell in enumerate(next_row.cells):
+
                         if "date" in next_cell.text.strip().lower():
+
                             if j + 1 < len(next_row.cells):
                                 next_row.cells[j + 1].text = signature_date
 
-            # Second location: Signature:
-            elif text in ["signature:", "signature"]:
-                if i + 1 < len(cells):
-                    insert_signature_image(cells[i + 1], signature_bytes)
+                            break
 
-                # Date in adjacent cell
-                for j, date_cell in enumerate(cells):
-                    if "date" in date_cell.text.strip().lower():
-                        if j + 1 < len(cells):
-                            cells[j + 1].text = signature_date
-                        break
+            # -------------------------------------------------
+            # Second location ONLY ONCE
+            # Signature:
+            # -------------------------------------------------
+
+            elif (
+                not second_signature_done
+                and text in ["signature:", "signature"]
+            ):
+
+                if signature_bytes and i + 1 < len(cells):
+                    insert_signature_image(
+                        cells[i + 1],
+                        signature_bytes
+                    )
+
+                # Date in same row
+                if signature_date:
+
+                    for j, date_cell in enumerate(cells):
+
+                        if "date" in date_cell.text.strip().lower():
+
+                            if j + 1 < len(cells):
+                                cells[j + 1].text = signature_date
+
+                            break
+
+                second_signature_done = True
 
 
 def extract_lo_sections_from_rubric(rubric_text):
