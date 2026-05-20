@@ -499,44 +499,23 @@ def fill_signature_fields(table, signature_bytes, signature_date):
     if not signature_bytes and not signature_date:
         return
 
-    second_signature_done = False
-
     for row_index, row in enumerate(table.rows):
         cells = row.cells
 
         for i, cell in enumerate(cells):
             text = cell.text.strip().lower()
 
-            # First location: Assessor Signature:
             if "assessor signature" in text:
-
-                if signature_bytes:
-                    for j in range(i + 1, len(cells)):
-                        if is_empty_cell(cells[j]):
-                            insert_signature_image(cells[j], signature_bytes)
-                            break
-                    else:
-                        if i + 1 < len(cells):
-                            insert_signature_image(cells[i + 1], signature_bytes)
-
-                if signature_date and row_index + 1 < len(table.rows):
-                    next_row = table.rows[row_index + 1]
-                    fill_adjacent_or_empty(next_row, ["Date"], signature_date)
-
-            # Second location: Signature: only once
-            elif not second_signature_done and text in ["signature:", "signature"]:
-
                 if signature_bytes and i + 1 < len(cells):
                     insert_signature_image(cells[i + 1], signature_bytes)
 
-                if signature_date:
-                    for j, date_cell in enumerate(cells):
-                        if "date" in date_cell.text.strip().lower():
-                            if j + 1 < len(cells):
-                                cells[j + 1].text = signature_date
-                            break
-
-                second_signature_done = True
+                if signature_date and row_index + 1 < len(table.rows):
+                    next_row = table.rows[row_index + 1]
+                    fill_adjacent_or_empty(
+                        row=next_row,
+                        label_keywords=["Date"],
+                        value=signature_date
+                    )
 
 
 def fill_student_signature_fields(table, student_signature_bytes, signature_date):
