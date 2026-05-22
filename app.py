@@ -11,6 +11,11 @@ from docx.shared import Pt, Inches, Cm
 from docx.enum.table import WD_ROW_HEIGHT_RULE
 from openai import OpenAI, RateLimitError, APIError, APITimeoutError
 
+from pypdf import PdfReader, PdfWriter
+import os
+import tempfile
+import subprocess
+
 
 # =========================================================
 # Streamlit setup
@@ -106,6 +111,49 @@ def row_texts(row):
 
 def row_full_text(row):
     return " | ".join(row_texts(row))
+
+# =========================================================
+# PDF readers
+# =========================================================
+def convert_docx_to_pdf(docx_path, output_dir):
+    subprocess.run(
+        [
+            "libreoffice",
+            "--headless",
+            "--convert-to",
+            "pdf",
+            "--outdir",
+            output_dir,
+            docx_path
+        ],
+        check=True
+    )
+
+    pdf_path = os.path.join(
+        output_dir,
+        os.path.splitext(os.path.basename(docx_path))[0] + ".pdf"
+    )
+
+    return pdf_path
+
+
+def merge_pdfs(existing_pdf_bytes, feedback_pdf_path):
+    writer = PdfWriter()
+
+    existing_reader = PdfReader(io.BytesIO(existing_pdf_bytes))
+    feedback_reader = PdfReader(feedback_pdf_path)
+
+    for page in existing_reader.pages:
+        writer.add_page(page)
+
+    for page in feedback_reader.pages:
+        writer.add_page(page)
+
+    output = io.BytesIO()
+    writer.write(output)
+    output.seek(0)
+
+    return output.getvalue()
 
 
 # =========================================================
@@ -1068,7 +1116,7 @@ def fill_template(
 rubric_file = st.file_uploader("Upload rubric.docx", type=["docx"])
 classlist_file = st.file_uploader("Upload classlist.xlsx", type=["xlsx"])
 template_file = st.file_uploader("Upload Template_Feedback.docx", type=["docx"])
-
+existing_pdf_zip = st.file_uploader("Upload ZIP containing existing student PDFs",type=["zip"])
 
 # =========================================================
 # Main process
@@ -1080,6 +1128,21 @@ if st.button("Generate AI Feedback Files"):
         st.stop()
 
     classlist_bytes = classlist_file.getvalue()
+    existing_pdfs = {}
+    
+    if existing_pdf_zip is not None:
+    
+        with zipfile.ZipFile(existing_pdf_zip, "r") as zip_ref:
+    
+            for name in zip_ref.namelist():
+    
+                if name.lower().endswith(".pdf"):
+    
+                    key = os.path.splitext(
+                        os.path.basename(name)
+                    )[0]
+    
+                    existing_pdfs[key] = zip_ref.read(name)
     student_signatures = extract_student_signatures_from_excel(classlist_bytes)
 
     st.subheader("Detected Student Signatures")
@@ -1195,6 +1258,35 @@ if st.button("Generate AI Feedback Files"):
 
             safe_name = re.sub(r'[\\/*?:"<>|]', "", str(student_name))
             safe_name = safe_name.replace(" ", "_")
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                docx_path = os.path.join(tmpdir, output_name)
+            
+                with open(docx_path, "wb") as f:
+                    f.write(doc_buffer.getvalue())
+            
+                feedback_pdf_path = convert_docx_to_pdf(docx_path, tmpdir)
+            
+                student_id_key = str(student_id).strip()
+                pdf_key = None
+            
+                for key in existing_pdfs.keys():
+                    if student_id_key in key:
+                        pdf_key = key
+                        break
+            
+                if pdf_key:
+                    merged_pdf_bytes = merge_pdfs(
+                        existing_pdf_bytes=existing_pdfs[pdf_key],
+                        feedback_pdf_path=feedback_pdf_path
+                    )
+            
+                    zip_file.writestr(
+                        f"{student_id}_{safe_name}_combined.pdf",
+                        merged_pdf_bytes
+                    )
+                else:
+                    zip_file.writestr(output_name, doc_buffer.getvalue())
 
             output_name = f"{student_id}_{safe_name}.docx"
             zip_file.writestr(output_name, doc_buffer.getvalue())
