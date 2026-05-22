@@ -1258,7 +1258,10 @@ if st.button("Generate AI Feedback Files"):
 
             safe_name = re.sub(r'[\\/*?:"<>|]', "", str(student_name))
             safe_name = safe_name.replace(" ", "_")
-
+            output_name = f"{student_id}_{safe_name}.docx"
+            if existing_pdf_zip is None:
+                zip_file.writestr(output_name, doc_buffer.getvalue())
+                
             with tempfile.TemporaryDirectory() as tmpdir:
                 docx_path = os.path.join(tmpdir, output_name)
             
@@ -1288,7 +1291,7 @@ if st.button("Generate AI Feedback Files"):
                 else:
                     zip_file.writestr(output_name, doc_buffer.getvalue())
 
-            output_name = f"{student_id}_{safe_name}.docx"
+            
             zip_file.writestr(output_name, doc_buffer.getvalue())
 
             progress.progress((index + 1) / len(df))
