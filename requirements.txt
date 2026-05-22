@@ -6,3 +6,4 @@ pymupdf
 pytesseract
 pillow
 openai
+pypdf
