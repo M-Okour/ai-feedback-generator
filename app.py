@@ -116,23 +116,25 @@ def row_full_text(row):
 # PDF readers
 # =========================================================
 def convert_docx_to_pdf(docx_path, output_dir):
-    subprocess.run(
-        [
-            "libreoffice",
-            "--headless",
-            "--convert-to",
-            "pdf",
-            "--outdir",
-            output_dir,
-            docx_path
-        ],
-        check=True
-    )
+    command = [
+        "soffice",
+        "--headless",
+        "--convert-to",
+        "pdf",
+        "--outdir",
+        output_dir,
+        docx_path
+    ]
+
+    subprocess.run(command, check=True)
 
     pdf_path = os.path.join(
         output_dir,
         os.path.splitext(os.path.basename(docx_path))[0] + ".pdf"
     )
+
+    if not os.path.exists(pdf_path):
+        raise FileNotFoundError(f"PDF conversion failed: {pdf_path}")
 
     return pdf_path
 
