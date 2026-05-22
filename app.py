@@ -7,7 +7,8 @@ import streamlit as st
 
 from openpyxl import load_workbook
 from docx import Document
-from docx.shared import Pt, Inches
+from docx.shared import Pt, Inches, Cm
+from docx.enum.table import WD_ROW_HEIGHT_RULE
 from openai import OpenAI, RateLimitError, APIError, APITimeoutError
 
 
@@ -743,7 +744,9 @@ def fill_marks_in_assessment_table(table, pc_marks):
                     row.cells[col].text = ""
 
             row.cells[target_col].text = str(int(mark))
-
+            
+        row.height = Cm(0.7)
+        row.height_rule = WD_ROW_HEIGHT_RULE.EXACTLY
 
 def fill_summative_grade_in_table(table, pc_marks):
     marks = [float(m) for m in pc_marks.values()]
