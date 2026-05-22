@@ -129,6 +129,15 @@ def read_docx_text(file):
 
     return "\n".join(parts)
 
+def remove_cell_paragraph_spacing(cell):
+    """
+    Removes space before/after for all paragraphs in a cell.
+    """
+
+    for paragraph in cell.paragraphs:
+        paragraph.paragraph_format.space_before = Pt(0)
+        paragraph.paragraph_format.space_after = Pt(0)
+        paragraph.paragraph_format.line_spacing = 1
 
 def extract_student_signatures_from_excel(classlist_bytes):
     """
