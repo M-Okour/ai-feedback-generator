@@ -1044,6 +1044,11 @@ def fill_template(
         lo_data=lo_data
     )
 
+    for table in doc.tables:
+    for row in table.rows:
+        for cell in row.cells:
+            remove_cell_paragraph_spacing(cell)
+            
     return doc
 
 
